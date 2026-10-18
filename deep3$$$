@@ -1,0 +1,591 @@
+-- [[ BLOX FRUITS AUTOFARM v4 — DELTA ANDROID FIX ]]
+-- Luau / Delta Executor (Android)
+
+-- ============ services ============
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService        = game:GetService("RunService")
+local TweenService      = game:GetService("TweenService")
+local VirtualUser       = game:GetService("VirtualUser")
+local TeleportService   = game:GetService("TeleportService")
+local HttpService       = game:GetService("HttpService")
+local Workspace         = game:GetService("Workspace")
+local StarterGui        = game:GetService("StarterGui")
+
+print("[OLLIE v4] script loaded")
+
+-- ============ LocalPlayer (Delta-safe) ============
+local LP = Players.LocalPlayer
+if not LP then
+    -- если Delta ещё не отдал LocalPlayer, ждём событие, а не крутим цикл
+    local conn
+    conn = Players:GetPropertyChangedSignal("LocalPlayer"):Connect(function()
+        if Players.LocalPlayer then
+            LP = Players.LocalPlayer
+            conn:Disconnect()
+        end
+    end)
+    if not LP then
+        repeat task.wait(0.1) until LP
+    end
+end
+print("[OLLIE v4] LocalPlayer: " .. tostring(LP and LP.Name))
+
+-- ============ instant feedback ============
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "OLLIE BF V4",
+        Text = "Loaded. Booting systems...",
+        Duration = 5
+    })
+end)
+
+-- ============ config ============
+local Env = (getgenv and getgenv()) or _G
+Env.OllieV4 = {
+    Enabled        = true,
+    AutoStats      = true,
+    AutoRoll       = true,
+    BringMobs      = true,
+    Evasion        = true,
+    SafePlayerDist = 80,
+    FlightSpeed    = 270,
+    HoverHeight    = 15,
+    AttackDelay    = 0.15,
+    WeaponType     = "Melee",
+}
+
+-- ============ HUD in PlayerGui ============
+local statusLbl, infoLbl
+
+local function buildHUD()
+    local pg = LP:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local old = pg:FindFirstChild("OllieV4Hud")
+    if old then old:Destroy() end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name           = "OllieV4Hud"
+    sg.ResetOnSpawn   = false
+    sg.DisplayOrder   = 999999
+    sg.Parent         = pg
+
+    local frame = Instance.new("Frame")
+    frame.Size              = UDim2.new(0, 290, 0, 130)
+    frame.Position          = UDim2.new(0, 12, 0, 40)
+    frame.BackgroundColor3  = Color3.fromRGB(16, 18, 24)
+    frame.BorderSizePixel   = 0
+    frame.Active            = true
+    frame.Draggable         = true
+    frame.Parent            = sg
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color     = Color3.fromRGB(0, 255, 136)
+    stroke.Thickness = 2
+    stroke.Parent    = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size              = UDim2.new(1, -16, 0, 24)
+    title.Position          = UDim2.new(0, 8, 0, 6)
+    title.BackgroundTransparency = 1
+    title.Text              = "OLLIE BF FARM V4"
+    title.TextColor3        = Color3.fromRGB(0, 255, 136)
+    title.Font              = Enum.Font.GothamBold
+    title.TextSize          = 14
+    title.TextXAlignment    = Enum.TextXAlignment.Left
+    title.Parent            = frame
+
+    statusLbl = Instance.new("TextLabel")
+    statusLbl.Size              = UDim2.new(1, -16, 0, 32)
+    statusLbl.Position          = UDim2.new(0, 8, 0, 30)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text              = "Status: init..."
+    statusLbl.TextColor3        = Color3.fromRGB(230, 230, 230)
+    statusLbl.Font              = Enum.Font.Gotham
+    statusLbl.TextSize          = 12
+    statusLbl.TextWrapped       = true
+    statusLbl.TextXAlignment    = Enum.TextXAlignment.Left
+    statusLbl.TextYAlignment    = Enum.TextYAlignment.Top
+    statusLbl.Parent            = frame
+
+    infoLbl = Instance.new("TextLabel")
+    infoLbl.Size              = UDim2.new(1, -16, 0, 20)
+    infoLbl.Position          = UDim2.new(0, 8, 0, 66)
+    infoLbl.BackgroundTransparency = 1
+    infoLbl.Text              = "LVL: -- | Quest: --"
+    infoLbl.TextColor3        = Color3.fromRGB(160, 165, 180)
+    infoLbl.Font              = Enum.Font.Gotham
+    infoLbl.TextSize          = 11
+    infoLbl.TextXAlignment    = Enum.TextXAlignment.Left
+    infoLbl.Parent            = frame
+
+    local toggle = Instance.new("TextButton")
+    toggle.Size              = UDim2.new(0, 130, 0, 28)
+    toggle.Position          = UDim2.new(0, 8, 0, 92)
+    toggle.BackgroundColor3  = Color3.fromRGB(0, 170, 90)
+    toggle.BorderSizePixel   = 0
+    toggle.Text              = "FARM: ON"
+    toggle.TextColor3        = Color3.fromRGB(255, 255, 255)
+    toggle.Font              = Enum.Font.GothamBold
+    toggle.TextSize          = 12
+    toggle.Parent            = frame
+    local tc = Instance.new("UICorner")
+    tc.CornerRadius = UDim.new(0, 5)
+    tc.Parent = toggle
+
+    local hop = Instance.new("TextButton")
+    hop.Size              = UDim2.new(0, 130, 0, 28)
+    hop.Position          = UDim2.new(0, 146, 0, 92)
+    hop.BackgroundColor3  = Color3.fromRGB(45, 95, 200)
+    hop.BorderSizePixel   = 0
+    hop.Text              = "SERVER HOP"
+    hop.TextColor3        = Color3.fromRGB(255, 255, 255)
+    hop.Font              = Enum.Font.GothamBold
+    hop.TextSize          = 12
+    hop.Parent            = frame
+    local hc = Instance.new("UICorner")
+    hc.CornerRadius = UDim.new(0, 5)
+    hc.Parent = hop
+
+    toggle.MouseButton1Click:Connect(function()
+        Env.OllieV4.Enabled = not Env.OllieV4.Enabled
+        if Env.OllieV4.Enabled then
+            toggle.Text             = "FARM: ON"
+            toggle.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+            title.TextColor3        = Color3.fromRGB(0, 255, 136)
+            stroke.Color            = Color3.fromRGB(0, 255, 136)
+        else
+            toggle.Text             = "FARM: OFF"
+            toggle.BackgroundColor3 = Color3.fromRGB(190, 50, 50)
+            title.TextColor3        = Color3.fromRGB(255, 80, 80)
+            stroke.Color            = Color3.fromRGB(255, 80, 80)
+        end
+    end)
+
+    hop.MouseButton1Click:Connect(function()
+        pcall(function() doServerHop() end)
+    end)
+end
+
+pcall(buildHUD)
+LP.CharacterAdded:Connect(function()
+    task.wait(1)
+    pcall(buildHUD)
+end)
+
+local function setStatus(txt, lvl, target)
+    pcall(function()
+        if statusLbl then
+            statusLbl.Text = "Status: " .. tostring(txt)
+        end
+        if infoLbl and (lvl or target) then
+            infoLbl.Text = "LVL: " .. tostring(lvl or "--") .. " | Quest: " .. tostring(target or "--")
+        end
+    end)
+end
+
+-- ============ CommF_ ============
+local CommF = nil
+local function getCommF()
+    if CommF and CommF.Parent then return CommF end
+    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+    if rem then
+        CommF = rem:FindFirstChild("CommF_")
+    end
+    return CommF
+end
+
+-- ============ team selection ============
+local function ensureTeam()
+    local tries = 0
+    while tries < 30 do
+        tries = tries + 1
+
+        if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+            return true
+        end
+
+        setStatus("Selecting team (Pirates) try " .. tries .. "...")
+
+        pcall(function()
+            local cf = getCommF()
+            if cf then cf:InvokeServer("SetTeam", "Pirates") end
+        end)
+
+        -- GUI fallback (Delta: firesignal is supported)
+        pcall(function()
+            local pg = LP:FindFirstChild("PlayerGui")
+            local main = pg and (pg:FindFirstChild("Main") or pg:FindFirstChild("Main (minimal)"))
+            local ct = main and main:FindFirstChild("ChooseTeam")
+            if not ct then return end
+            local container = ct:FindFirstChild("Container")
+            local pirates = container and container:FindFirstChild("Pirates")
+            local pf = pirates and pirates:FindFirstChild("Frame")
+            local btn = pf and (pf:FindFirstChild("TextButton") or pf:FindFirstChild("Button"))
+            if btn and btn:IsA("TextButton") and firesignal then
+                pcall(function() firesignal(btn.MouseButton1Click) end)
+                pcall(function() firesignal(btn.MouseButton1Down) end)
+                pcall(function() firesignal(btn.Activated) end)
+            end
+        end)
+
+        task.wait(1)
+    end
+    return LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") ~= nil
+end
+
+-- ============ anti-AFK ============
+LP.Idled:Connect(function()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button2Down(Vector2.new(0, 0), Workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), Workspace.CurrentCamera.CFrame)
+    end)
+end)
+
+-- ============ server hop ============
+local hopBusy = false
+function doServerHop()
+    if hopBusy then return end
+    hopBusy = true
+    setStatus("Looking for server...")
+    pcall(function()
+        local placeId = game.PlaceId
+        local jobId   = game.JobId
+        local url     = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
+        local body
+        local ok = pcall(function()
+            local req = (http_request or request or (syn and syn.request))
+            if req then
+                local r = req({ Url = url, Method = "GET" })
+                body = r and r.Body
+            else
+                body = game:HttpGet(url)
+            end
+        end)
+        if ok and body then
+            local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+            if decOk and decoded and decoded.data then
+                for _, srv in ipairs(decoded.data) do
+                    if srv.id ~= jobId and srv.playing and srv.playing >= 2 and srv.playing <= 8 then
+                        setStatus("Hopping to new server...")
+                        pcall(function()
+                            TeleportService:TeleportToPlaceInstance(placeId, srv.id, LP)
+                        end)
+                        task.wait(4)
+                        break
+                    end
+                end
+            end
+        end
+    end)
+    hopBusy = false
+end
+
+-- ============ quest DB (Sea 1) ============
+local Quests = {
+    {Min=1,   Max=9,   Mob="Bandit",             QName="BanditQuest1",   QNum=1, QPos=CFrame.new(1059,16,1549),   MPos=CFrame.new(1145,17,1634)},
+    {Min=10,  Max=14,  Mob="Monkey",             QName="JungleQuest",    QNum=1, QPos=CFrame.new(-1598,36,153),   MPos=CFrame.new(-1448,50,63)},
+    {Min=15,  Max=29,  Mob="Gorilla",            QName="JungleQuest",    QNum=2, QPos=CFrame.new(-1598,36,153),   MPos=CFrame.new(-1129,40,-525)},
+    {Min=30,  Max=39,  Mob="Pirate",             QName="BuggyQuest1",    QNum=1, QPos=CFrame.new(-1140,4,3829),   MPos=CFrame.new(-1201,4,3916)},
+    {Min=40,  Max=59,  Mob="Brute",              QName="BuggyQuest1",    QNum=2, QPos=CFrame.new(-1140,4,3829),   MPos=CFrame.new(-1145,15,4350)},
+    {Min=60,  Max=74,  Mob="Desert Bandit",      QName="DesertQuest",    QNum=1, QPos=CFrame.new(894,6,4390),     MPos=CFrame.new(924,6,4481)},
+    {Min=75,  Max=89,  Mob="Desert Officer",     QName="DesertQuest",    QNum=2, QPos=CFrame.new(894,6,4390),     MPos=CFrame.new(1608,9,4371)},
+    {Min=90,  Max=99,  Mob="Snow Bandit",        QName="SnowQuest",      QNum=1, QPos=CFrame.new(1389,87,-1298),  MPos=CFrame.new(1354,87,-1393)},
+    {Min=100, Max=119, Mob="Snowman",            QName="SnowQuest",      QNum=2, QPos=CFrame.new(1389,87,-1298),  MPos=CFrame.new(1201,144,-1550)},
+    {Min=120, Max=149, Mob="Chief Petty Officer",QName="MarineQuest2",   QNum=1, QPos=CFrame.new(-5039,28,4324),  MPos=CFrame.new(-4881,22,4273)},
+    {Min=150, Max=174, Mob="Sky Bandit",         QName="SkyQuest",       QNum=1, QPos=CFrame.new(-4839,717,-2619),MPos=CFrame.new(-4953,295,-2899)},
+    {Min=175, Max=189, Mob="Dark Master",        QName="SkyQuest",       QNum=2, QPos=CFrame.new(-4839,717,-2619),MPos=CFrame.new(-5259,391,-2229)},
+    {Min=190, Max=209, Mob="Prisoner",           QName="PrisonerQuest",  QNum=1, QPos=CFrame.new(5308,2,475),     MPos=CFrame.new(5098,0,474)},
+    {Min=210, Max=249, Mob="Dangerous Prisoner", QName="PrisonerQuest",  QNum=2, QPos=CFrame.new(5308,2,475),     MPos=CFrame.new(5654,15,866)},
+    {Min=250, Max=299, Mob="Toga Warrior",       QName="ColosseumQuest", QNum=1, QPos=CFrame.new(-1580,7,-2986),  MPos=CFrame.new(-1820,51,-2740)},
+    {Min=300, Max=324, Mob="Military Soldier",   QName="MagmaQuest",     QNum=1, QPos=CFrame.new(-5313,12,8515),  MPos=CFrame.new(-5411,11,8454)},
+    {Min=325, Max=374, Mob="Military Spy",       QName="MagmaQuest",     QNum=2, QPos=CFrame.new(-5313,12,8515),  MPos=CFrame.new(-5802,86,8828)},
+    {Min=375, Max=399, Mob="Fishman Warrior",    QName="FishmanQuest",   QNum=1, QPos=CFrame.new(61122,18,1569),  MPos=CFrame.new(60878,18,1543)},
+    {Min=400, Max=449, Mob="Fishman Commando",   QName="FishmanQuest",   QNum=2, QPos=CFrame.new(61122,18,1569),  MPos=CFrame.new(61922,18,1493)},
+    {Min=450, Max=474, Mob="God's Guard",        QName="SkyExp1Quest",   QNum=1, QPos=CFrame.new(-4721,843,-1949),MPos=CFrame.new(-4710,845,-1927)},
+    {Min=475, Max=524, Mob="Shanda",             QName="SkyExp1Quest",   QNum=2, QPos=CFrame.new(-7859,5544,-381), MPos=CFrame.new(-7678,5566,-497)},
+    {Min=525, Max=549, Mob="Royal Squad",        QName="SkyExp2Quest",   QNum=1, QPos=CFrame.new(-7906,5634,-1411),MPos=CFrame.new(-7624,5658,-1467)},
+    {Min=550, Max=624, Mob="Royal Soldier",      QName="SkyExp2Quest",   QNum=2, QPos=CFrame.new(-7906,5634,-1411),MPos=CFrame.new(-7836,5645,-1790)},
+    {Min=625, Max=649, Mob="Galley Pirate",      QName="FountainQuest",  QNum=1, QPos=CFrame.new(5259,38,4050),   MPos=CFrame.new(5551,78,3930)},
+    {Min=650, Max=99999, Mob="Galley Captain",   QName="FountainQuest",  QNum=2, QPos=CFrame.new(5259,38,4050),   MPos=CFrame.new(5649,38,4936)},
+}
+
+local function getLevel()
+    local d = LP:FindFirstChild("Data")
+    if not d then return 1 end
+    local l = d:FindFirstChild("Level")
+    if not l then return 1 end
+    return l.Value
+end
+
+local function getQuest()
+    local lvl = getLevel()
+    for _, q in ipairs(Quests) do
+        if lvl >= q.Min and lvl <= q.Max then return q, lvl end
+    end
+    return Quests[#Quests], lvl
+end
+
+local function isQuestActive(mobName)
+    local pg = LP:FindFirstChild("PlayerGui")
+    local main = pg and pg:FindFirstChild("Main")
+    local qf = main and main:FindFirstChild("Quest")
+    if not qf or not qf.Visible then return false end
+    local cont = qf:FindFirstChild("Container")
+    local qt = cont and cont:FindFirstChild("QuestTitle")
+    local title = qt and qt:FindFirstChild("Title")
+    if title and title:IsA("TextLabel") then
+        if not string.find(string.lower(title.Text), string.lower(mobName), 1, true) then
+            pcall(function()
+                local cf = getCommF()
+                if cf then cf:InvokeServer("AbandonQuest") end
+            end)
+            return false
+        end
+        return true
+    end
+    return false
+end
+
+-- ============ flight (Delta-safe) ============
+local TargetCF = nil
+local ZeroVec  = Vector3.new(0, 0, 0)
+
+RunService.Heartbeat:Connect(function(dt)
+    if not Env.OllieV4.Enabled then return end
+    local char = LP.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
+
+    pcall(function()
+        -- Delta/Roblox: AssemblyLinearVelocity is the modern property; Velocity still aliases it
+        if root.AssemblyLinearVelocity then
+            root.AssemblyLinearVelocity = ZeroVec
+        else
+            root.Velocity = ZeroVec
+        end
+        if root.AssemblyAngularVelocity then
+            root.AssemblyAngularVelocity = ZeroVec
+        else
+            root.RotVelocity = ZeroVec
+        end
+    end)
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then
+            pcall(function() p.CanCollide = false end)
+        end
+    end
+
+    if TargetCF then
+        local cur  = root.Position
+        local dst  = TargetCF.Position
+        local diff = dst - cur
+        local dist = diff.Magnitude
+        if dist <= 5 then
+            root.CFrame = TargetCF
+        else
+            local step = math.min(dist, Env.OllieV4.FlightSpeed * dt)
+            root.CFrame = CFrame.new(cur + diff.Unit * step)
+        end
+    end
+end)
+
+-- ============ weapon ============
+local function equipWeapon()
+    local char = LP.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum then return nil end
+    local cur = char:FindFirstChildOfClass("Tool")
+    if cur then return cur end
+    local bp = LP:FindFirstChild("Backpack")
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") then
+                pcall(function() hum:EquipTool(t) end)
+                return t
+            end
+        end
+    end
+    return nil
+end
+
+-- ============ bring mobs (Delta-safe) ============
+local function bringMobs(mobName, center)
+    if not Env.OllieV4.BringMobs then return end
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    pcall(function()
+        -- Delta supports sethiddenproperty; fall back to setsimulationradius if present
+        if sethiddenproperty then
+            sethiddenproperty(LP, "SimulationRadius", math.huge)
+        elseif setsimulationradius then
+            setsimulationradius(math.huge)
+        end
+    end)
+    for _, m in ipairs(enemies:GetChildren()) do
+        if m.Name == mobName then
+            local r = m:FindFirstChild("HumanoidRootPart")
+            local h = m:FindFirstChildOfClass("Humanoid")
+            if r and h and h.Health > 0 then
+                if (r.Position - center).Magnitude <= 250 then
+                    pcall(function()
+                        r.CanCollide = false
+                        r.AssemblyLinearVelocity = ZeroVec
+                        r.CFrame     = CFrame.new(center)
+                    end)
+                end
+            end
+        end
+    end
+end
+
+-- ============ attack (triple-path, Delta-safe) ============
+local function attack(mob)
+    local char = LP.Character
+    if not char then return end
+
+    if not char:FindFirstChild("HasBuso") then
+        pcall(function()
+            local cf = getCommF()
+            if cf then cf:InvokeServer("Buso") end
+        end)
+    end
+
+    local tool = equipWeapon()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    pcall(function()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        if not net then return end
+        local atk = net:FindFirstChild("RE/RegisterAttack")
+        local hit = net:FindFirstChild("RE/RegisterHit")
+        if atk and hit and mob and mob:FindFirstChild("HumanoidRootPart") then
+            atk:FireServer(0)
+            hit:FireServer(mob.HumanoidRootPart, {{mob, mob.HumanoidRootPart}})
+        end
+    end)
+
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton1(Vector2.new(400, 225))
+    end)
+end
+
+-- ============ auto stats + roll ============
+task.spawn(function()
+    while task.wait(4) do
+        if Env.OllieV4.Enabled then
+            local cf = getCommF()
+            if cf then
+                if Env.OllieV4.AutoStats then
+                    pcall(function()
+                        local d = LP:FindFirstChild("Data")
+                        local p = d and d:FindFirstChild("Points")
+                        if p and p.Value > 0 then
+                            cf:InvokeServer("AddPoint", "Melee", 2)
+                            cf:InvokeServer("AddPoint", "Defense", 1)
+                        end
+                    end)
+                end
+                if Env.OllieV4.AutoRoll then
+                    pcall(function() cf:InvokeServer("Cousin", "Buy") end)
+                end
+            end
+        end
+    end
+end)
+
+-- ============ main farm loop ============
+task.spawn(function()
+    ensureTeam()
+    setStatus("Team ready. Farm starting...")
+    print("[OLLIE v4] main loop entered")
+    while true do
+        task.wait(Env.OllieV4.AttackDelay)
+        if not Env.OllieV4.Enabled then
+            TargetCF = nil
+        else
+            pcall(function()
+                if not LP.Team then
+                    ensureTeam()
+                end
+                local char = LP.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not char or not root or not hum or hum.Health <= 0 then
+                    setStatus("Waiting for character...")
+                    return
+                end
+
+                if Env.OllieV4.Evasion then
+                    for _, p in ipairs(Players:GetPlayers()) do
+                        if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                            if (root.Position - p.Character.HumanoidRootPart.Position).Magnitude < Env.OllieV4.SafePlayerDist then
+                                setStatus("Player nearby! Hopping...")
+                                doServerHop()
+                                return
+                            end
+                        end
+                    end
+                end
+
+                local q, lvl = getQuest()
+
+                if not isQuestActive(q.Mob) then
+                    local npcDist = (root.Position - q.QPos.Position).Magnitude
+                    setStatus("Fly to NPC (" .. math.floor(npcDist) .. "m)", lvl, q.QName)
+                    TargetCF = q.QPos
+                    if npcDist <= 12 then
+                        local cf = getCommF()
+                        if cf then
+                            cf:InvokeServer("StartQuest", q.QName, q.QNum)
+                            task.wait(0.4)
+                        end
+                    end
+                else
+                    local enemies = Workspace:FindFirstChild("Enemies")
+                    local target = nil
+                    if enemies then
+                        for _, m in ipairs(enemies:GetChildren()) do
+                            if m.Name == q.Mob then
+                                local mh = m:FindFirstChildOfClass("Humanoid")
+                                local mr = m:FindFirstChild("HumanoidRootPart")
+                                if mh and mr and mh.Health > 0 then
+                                    target = m
+                                    break
+                                end
+                            end
+                        end
+                    end
+
+                    if target then
+                        local mp   = target.HumanoidRootPart.Position
+                        local dist = (root.Position - mp).Magnitude
+                        setStatus("Hit " .. q.Mob .. " HP:" .. math.floor(target.Humanoid.Health), lvl, q.QName)
+                        TargetCF = CFrame.new(mp + Vector3.new(0, Env.OllieV4.HoverHeight, 0))
+                        if dist <= 40 then
+                            bringMobs(q.Mob, mp)
+                            attack(target)
+                        end
+                    else
+                        setStatus("Wait respawn " .. q.Mob, lvl, q.QName)
+                        TargetCF = q.MPos * CFrame.new(0, 20, 0)
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+print("[OLLIE v4] fully booted. Farm live.")
