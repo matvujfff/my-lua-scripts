@@ -11,14 +11,14 @@ local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 local StarterGui = game:GetService("StarterGui")
 
--- 1. Безопасное ожидание LocalPlayer (без вечного зависания game.Loaded)
+-- 1. Безопасное ожидание LocalPlayer
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do
     task.wait(0.2)
     LocalPlayer = Players.LocalPlayer
 end
 
--- Мгновенный сигнал в правом нижнем углу экрана (Доказательство инжекта №1)
+-- Мгновенный сигнал в правом нижнем углу экрана
 pcall(function()
     StarterGui:SetCore("SendNotification", {
         Title = "OLLIE FARM V3",
@@ -27,7 +27,7 @@ pcall(function()
     })
 end)
 
--- Глобальное состояние (с защитой если getgenv отсутствует)
+-- Глобальное состояние
 local Env = (getgenv and getgenv()) or _G
 Env.OllieV3 = {
     Enabled = true,
@@ -43,7 +43,7 @@ Env.OllieV3 = {
 }
 
 -- ============================================================================
--- 2. СОЗДАНИЕ НАДЕЖНОГО HUD В PLAYERGUI (БЕЗ COREGUI PERMISSION CRASH)
+-- 2. HUD (БЕЗ COREGUI PERMISSION CRASH)
 -- ============================================================================
 local StatusTextObj = nil
 local LevelTextObj = nil
@@ -168,7 +168,6 @@ pcall(function()
     HopButtonRef = buildSafeHUD()
 end)
 
--- Если PlayerGui перезагрузился — восстанавливаем окно
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     pcall(function()
@@ -199,33 +198,45 @@ local function serverHop()
 
     local placeId = game.PlaceId
     local jobId = game.JobId
-    local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
+    local cursor = ""
+    local foundServer = false
 
-    local ok, body = pcall(function()
-        local httpFunc = (http_request or request or (syn and syn.request))
-        if httpFunc then
-            local r = httpFunc({ Url = url, Method = "GET" })
-            return r and r.Body
+    repeat
+        local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
+        if cursor ~= "" then
+            url = url .. "&cursor=" .. tostring(cursor)
         end
-        return game:HttpGet(url)
-    end)
 
-    if ok and body then
-        local parsedOk, decoded = pcall(function()
-            return HttpService:JSONDecode(body)
+        local ok, body = pcall(function()
+            return game:HttpGet(url)
         end)
-        if parsedOk and decoded and decoded.data then
-            for i = 1, #decoded.data do
-                local srv = decoded.data[i]
-                if type(srv) == "table" and srv.id ~= jobId and srv.playing and srv.playing >= 2 and srv.playing <= 8 then
-                    setStatus("Переход на новый сервер...")
-                    pcall(function()
-                        TeleportService:TeleportToPlaceInstance(placeId, srv.id, LocalPlayer)
-                    end)
-                    task.wait(4)
+
+        if ok and body then
+            local parsedOk, decoded = pcall(function()
+                return HttpService:JSONDecode(body)
+            end)
+
+            if parsedOk and decoded and decoded.data then
+                for _, srv in ipairs(decoded.data) do
+                    if type(srv) == "table" and srv.id ~= jobId and srv.playing and srv.playing >= 2 and srv.playing <= 8 then
+                        setStatus("Переход на новый сервер...")
+                        pcall(function()
+                            TeleportService:TeleportToPlaceInstance(placeId, srv.id, LocalPlayer)
+                        end)
+                        foundServer = true
+                        break
+                    end
                 end
             end
+            cursor = decoded and decoded.nextPageCursor or ""
+        else
+            warn("Failed to fetch server list.")
+            break
         end
+    until foundServer or cursor == "" or cursor == nil
+
+    if not foundServer then
+        setStatus("Свободных серверов не найдено.")
     end
     HopBusy = false
 end
@@ -237,7 +248,7 @@ if HopButtonRef then
 end
 
 -- ============================================================================
--- 4. ДОСТУП К REMOTES И ВЫБОР КОМАНДЫ (PIRATES)
+-- 4. REMOTES И ВЫБОР КОМАНДЫ
 -- ============================================================================
 local CachedCommF = nil
 local function getCommF()
@@ -267,13 +278,9 @@ local function selectPiratesTeam()
 end
 
 -- ============================================================================
--- 5. БАЗА КВЕСТОВ ПЕРВОГО, ВТОРОГО И ТРЕТЬЕГО МОРЯ
+-- 5. БАЗА КВЕСТОВ ПЕРВОГО МОРЯ
 -- ============================================================================
-local PlaceId = game.PlaceId
-local IsSea1 = (PlaceId == 2753915549)
-local IsSea2 = (PlaceId == 4442272183)
-local IsSea3 = (PlaceId == 7449423635)
-
+-- ВНИМАНИЕ: Координаты могут требовать периодической проверки, так как карта игры обновляется.
 local QuestsSea1 = {
     {Min = 1, Max = 9, Mob = "Bandit", QName = "BanditQuest1", QNum = 1, QPos = CFrame.new(1059, 16, 1549), MPos = CFrame.new(1145, 17, 1634)},
     {Min = 10, Max = 14, Mob = "Monkey", QName = "JungleQuest", QNum = 1, QPos = CFrame.new(-1598, 36, 153), MPos = CFrame.new(-1448, 50, 63)},
@@ -305,14 +312,15 @@ local QuestsSea1 = {
 local function getLevel()
     local d = LocalPlayer:FindFirstChild("Data")
     local l = d and d:FindFirstChild("Level")
-    if l then return l.Value end
+    if l and l:IsA("IntValue") then
+        return l.Value
+    end
     return 1
 end
 
 local function getQuestForLevel()
     local lvl = getLevel()
-    for i = 1, #QuestsSea1 do
-        local q = QuestsSea1[i]
+    for _, q in ipairs(QuestsSea1) do
         if lvl >= q.Min and lvl <= q.Max then
             return q, lvl
         end
@@ -344,7 +352,7 @@ local function isQuestActiveForMob(mobName)
 end
 
 -- ============================================================================
--- 6. ПЛАВНОЕ ДВИЖЕНИЕ (НЕБЛОКИРУЮЩИЙ STEP + NOCLIP БЕЗ VECTOR3.ZERO)
+-- 6. ПЛАВНОЕ ДВИЖЕНИЕ (NOCLIP)
 -- ============================================================================
 local DesiredCFrame = nil
 local ZeroVec = Vector3.new(0, 0, 0)
@@ -362,9 +370,7 @@ RunService.Heartbeat:Connect(function(dt)
         root.RotVelocity = ZeroVec
     end)
 
-    local parts = char:GetDescendants()
-    for i = 1, #parts do
-        local p = parts[i]
+    for _, p in ipairs(char:GetDescendants()) do
         if p:IsA("BasePart") and p.CanCollide then
             p.CanCollide = false
         end
@@ -387,7 +393,7 @@ RunService.Heartbeat:Connect(function(dt)
 end)
 
 -- ============================================================================
--- 7. БОЕВОЙ МОДУЛЬ (ЭКИПИРОВКА, BRING MOBS, НАНЕСЕНИЕ УРОНА)
+-- 7. БОЕВОЙ МОДУЛЬ
 -- ============================================================================
 local function equipWeapon()
     local char = LocalPlayer.Character
@@ -401,9 +407,7 @@ local function equipWeapon()
 
     local bp = LocalPlayer:FindFirstChild("Backpack")
     if bp then
-        local items = bp:GetChildren()
-        for i = 1, #items do
-            local it = items[i]
+        for _, it in ipairs(bp:GetChildren()) do
             if it:IsA("Tool") and (it.ToolTip == Env.OllieV3.WeaponType or it.Name == "Combat") then
                 hum:EquipTool(it)
                 return it
@@ -426,12 +430,13 @@ local function bringMobsAround(mobName, centerPos)
     pcall(function()
         if sethiddenproperty then
             sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        elseif setscriptable then
+            setscriptable(LocalPlayer, "SimulationRadius", true)
+            LocalPlayer.SimulationRadius = math.huge
         end
     end)
 
-    local list = enemies:GetChildren()
-    for i = 1, #list do
-        local m = list[i]
+    for _, m in ipairs(enemies:GetChildren()) do
         if m.Name == mobName then
             local mRoot = m:FindFirstChild("HumanoidRootPart")
             local mHum = m:FindFirstChildOfClass("Humanoid")
@@ -485,7 +490,7 @@ local function attackTarget(mob)
 end
 
 -- ============================================================================
--- 8. АВТО-СТАТЫ И ПОКУПКА ФРУКТОВ (КАЖДЫЕ 4 СЕК)
+-- 8. АВТО-СТАТЫ И ПОКУПКА ФРУКТОВ
 -- ============================================================================
 task.spawn(function()
     while task.wait(4) do
@@ -496,7 +501,7 @@ task.spawn(function()
                     pcall(function()
                         local d = LocalPlayer:FindFirstChild("Data")
                         local pts = d and d:FindFirstChild("Points")
-                        if pts and pts.Value > 0 then
+                        if pts and pts:IsA("IntValue") and pts.Value > 0 then
                             comm:InvokeServer("AddPoint", "Melee", 2)
                             comm:InvokeServer("AddPoint", "Defense", 1)
                         end
@@ -513,7 +518,7 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- 9. ОСНОВНОЙ РАБОЧИЙ ЦИКЛ (БЕЗ ОПЕРАТОРА CONTINUE - 100% LUA 5.1 SAFE)
+-- 9. ОСНОВНОЙ РАБОЧИЙ ЦИКЛ
 -- ============================================================================
 task.spawn(function()
     while task.wait(Env.OllieV3.AttackDelay) do
@@ -529,12 +534,9 @@ task.spawn(function()
                     if not char or not root or not hum or hum.Health <= 0 then
                         setStatus("Ожидание спавна персонажа...")
                     else
-                        -- Проверка дистанции до других игроков
                         local threatFound = false
                         if Env.OllieV3.PlayerEvasion then
-                            local allPlrs = Players:GetPlayers()
-                            for i = 1, #allPlrs do
-                                local p = allPlrs[i]
+                            for _, p in ipairs(Players:GetPlayers()) do
                                 if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                                     local pDist = (root.Position - p.Character.HumanoidRootPart.Position).Magnitude
                                     if pDist < Env.OllieV3.SafePlayerDist then
@@ -550,7 +552,6 @@ task.spawn(function()
                         if not threatFound then
                             local qData, myLvl = getQuestForLevel()
 
-                            -- Автопереход во Второе море по достижении 700 уровня
                             if IsSea1 and myLvl >= 700 then
                                 local comm = getCommF()
                                 if comm then
@@ -574,9 +575,7 @@ task.spawn(function()
                                 local enemies = Workspace:FindFirstChild("Enemies")
                                 local target = nil
                                 if enemies then
-                                    local children = enemies:GetChildren()
-                                    for i = 1, #children do
-                                        local m = children[i]
+                                    for _, m in ipairs(enemies:GetChildren()) do
                                         if m.Name == qData.Mob then
                                             local mh = m:FindFirstChildOfClass("Humanoid")
                                             local mr = m:FindFirstChild("HumanoidRootPart")
