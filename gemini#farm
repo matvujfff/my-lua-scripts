@@ -1,56 +1,68 @@
--- [[ BLOX FRUITS PRODUCTION AUTO-FARM V3 - DELTA ANDROID SAFE ]] --
--- Строгий стандарт Lua 5.1 / Luau (без 'continue', без 'Vector3.zero', без CoreGui крашей)
+-- [[ BLOX FRUITS AUTO-FARM V3.1 - DELTA ANDROID SAFE ]] --
+-- Lua 5.1 / Luau strict: no `continue`, no Vector3.zero, no CoreGui dependency
+-- Fixes: (1) fault-tolerant Server Hop w/ TeleportInitFailed + instance-teleport fallback
+--        (2) grounded quest-start w/ velocity kill, CommF_ hard-wait, verify + 1s retry backoff
 
-local Players = game:GetService("Players")
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local VirtualUser = game:GetService("VirtualUser")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
-local Workspace = game:GetService("Workspace")
-local StarterGui = game:GetService("StarterGui")
+local RunService        = game:GetService("RunService")
+local TweenService      = game:GetService("TweenService")
+local VirtualUser       = game:GetService("VirtualUser")
+local TeleportService   = game:GetService("TeleportService")
+local HttpService       = game:GetService("HttpService")
+local Workspace         = game:GetService("Workspace")
+local StarterGui        = game:GetService("StarterGui")
 
--- 1. Безопасное ожидание LocalPlayer (без вечного зависания game.Loaded)
+local ZERO = Vector3.new(0, 0, 0)
+
+-- 1. LocalPlayer wait
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do
     task.wait(0.2)
     LocalPlayer = Players.LocalPlayer
 end
 
--- Мгновенный сигнал в правом нижнем углу экрана (Доказательство инжекта №1)
 pcall(function()
     StarterGui:SetCore("SendNotification", {
-        Title = "OLLIE FARM V3",
+        Title = "OLLIE FARM V3.1",
         Text = "Инжект успешен! Запуск систем...",
         Duration = 6
     })
 end)
 
--- Глобальное состояние (с защитой если getgenv отсутствует)
+-- 2. Global state
 local Env = (getgenv and getgenv()) or _G
-Env.OllieV3 = {
-    Enabled = true,
-    AutoStats = true,
-    AutoRollFruit = true,
-    BringMobs = true,
-    PlayerEvasion = true,
-    SafePlayerDist = 80,
-    TweenSpeed = 270,
-    HoverHeight = 15,
-    AttackDelay = 0.14,
-    WeaponType = "Melee"
-}
+Env.OllieV3 = Env.OllieV3 or {}
+Env.OllieV3.Enabled         = true
+Env.OllieV3.AutoStats       = true
+Env.OllieV3.AutoRollFruit   = true
+Env.OllieV3.BringMobs       = true
+Env.OllieV3.PlayerEvasion   = true
+Env.OllieV3.SafePlayerDist  = 80
+Env.OllieV3.TweenSpeed      = 270
+Env.OllieV3.HoverHeight     = 15
+Env.OllieV3.AttackDelay     = 0.14
+Env.OllieV3.WeaponType      = "Melee"
+Env.OllieV3.NextQuestAttempt= 0
+Env.OllieV3.HopBusy         = false
+
+-- 3. Log helper (prints into /console)
+local function log(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        parts[#parts + 1] = tostring(select(i, ...))
+    end
+    pcall(function() print("[OLLIE-V3.1] " .. table.concat(parts, " ")) end)
+end
 
 -- ============================================================================
--- 2. СОЗДАНИЕ НАДЕЖНОГО HUD В PLAYERGUI (БЕЗ COREGUI PERMISSION CRASH)
+-- 4. SAFE HUD (PlayerGui only, no CoreGui permission crash)
 -- ============================================================================
-local StatusTextObj = nil
-local LevelTextObj = nil
+local StatusTextObj, LevelTextObj = nil, nil
 
 local function buildSafeHUD()
     local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
-    if not pGui then return end
+    if not pGui then return nil end
 
     local old = pGui:FindFirstChild("OllieHudV3")
     if old then old:Destroy() end
@@ -75,7 +87,7 @@ local function buildSafeHUD()
     title.Size = UDim2.new(1, -12, 0, 22)
     title.Position = UDim2.new(0, 6, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "OLLIE BF FARM V3 [РАБОТАЕТ]"
+    title.Text = "OLLIE BF FARM V3.1 [РАБОТАЕТ]"
     title.TextColor3 = Color3.fromRGB(0, 255, 136)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 15
@@ -136,13 +148,13 @@ local function buildSafeHUD()
         if Env.OllieV3.Enabled then
             toggleBtn.Text = "ФАРМ: ВКЛ"
             toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
-            title.Text = "OLLIE BF FARM V3 [РАБОТАЕТ]"
+            title.Text = "OLLIE BF FARM V3.1 [РАБОТАЕТ]"
             title.TextColor3 = Color3.fromRGB(0, 255, 136)
             frame.BorderColor3 = Color3.fromRGB(0, 255, 136)
         else
             toggleBtn.Text = "ФАРМ: ПАУЗА"
             toggleBtn.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
-            title.Text = "OLLIE BF FARM V3 [ПАУЗА]"
+            title.Text = "OLLIE BF FARM V3.1 [ПАУЗА]"
             title.TextColor3 = Color3.fromRGB(255, 80, 80)
             frame.BorderColor3 = Color3.fromRGB(255, 80, 80)
             statusLbl.Text = "Статус: На паузе"
@@ -163,12 +175,8 @@ local function setStatus(msg, lvl, targetName)
     end)
 end
 
-local HopButtonRef = nil
-pcall(function()
-    HopButtonRef = buildSafeHUD()
-end)
+local HopButtonRef = buildSafeHUD()
 
--- Если PlayerGui перезагрузился — восстанавливаем окно
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     pcall(function()
@@ -180,7 +188,7 @@ LocalPlayer.CharacterAdded:Connect(function()
 end)
 
 -- ============================================================================
--- 3. ЗАЩИТА ОТ AFK И СМЕНА СЕРВЕРА
+-- 5. AFK protection
 -- ============================================================================
 LocalPlayer.Idled:Connect(function()
     pcall(function()
@@ -191,75 +199,178 @@ LocalPlayer.Idled:Connect(function()
     end)
 end)
 
-local HopBusy = false
-local function serverHop()
-    if HopBusy then return end
-    HopBusy = true
-    setStatus("Ищем свободный сервер...")
-
-    local placeId = game.PlaceId
-    local jobId = game.JobId
-    local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
-
-    local ok, body = pcall(function()
-        local httpFunc = (http_request or request or (syn and syn.request))
-        if httpFunc then
-            local r = httpFunc({ Url = url, Method = "GET" })
-            return r and r.Body
+-- ============================================================================
+-- 6. SERVER HOP — fault tolerant
+-- ============================================================================
+local function httpGet(url)
+    local ok, resp = pcall(function()
+        if syn and syn.request then
+            return syn.request({Url = url, Method = "GET"})
         end
-        return game:HttpGet(url)
+        if http_request then
+            return http_request({Url = url, Method = "GET"})
+        end
+        if request then
+            return request({Url = url, Method = "GET"})
+        end
+        if http and http.request then
+            return http.request({Url = url, Method = "GET"})
+        end
+        return { Body = game:HttpGet(url), StatusCode = 200 }
+    end)
+    if not ok or resp == nil then return nil end
+    if type(resp) == "string" then return resp end
+    if type(resp) == "table" then
+        return resp.Body or resp.body or resp.Data
+    end
+    return nil
+end
+
+-- One-shot teleport attempt with TeleportInitFailed watch.
+-- Returns (true) if queued / successful, (false, reason) on init failure.
+local function tryTeleportInstance(placeId, targetJobId)
+    local failedReason = nil
+    local conn = nil
+    local ok = pcall(function()
+        conn = TeleportService.TeleportInitFailed:Connect(function(plr, _res, msg)
+            if plr == LocalPlayer then
+                failedReason = tostring(msg or "unknown")
+            end
+        end)
     end)
 
-    if ok and body then
-        local parsedOk, decoded = pcall(function()
-            return HttpService:JSONDecode(body)
-        end)
-        if parsedOk and decoded and decoded.data then
-            for i = 1, #decoded.data do
-                local srv = decoded.data[i]
-                if type(srv) == "table" and srv.id ~= jobId and srv.playing and srv.playing >= 2 and srv.playing <= 8 then
-                    setStatus("Переход на новый сервер...")
-                    pcall(function()
-                        TeleportService:TeleportToPlaceInstance(placeId, srv.id, LocalPlayer)
-                    end)
-                    task.wait(4)
-                end
+    local sent = false
+    pcall(function()
+        TeleportService:TeleportToPlaceInstance(placeId, targetJobId, LocalPlayer)
+        sent = true
+    end)
+
+    if not sent then
+        if conn then conn:Disconnect() end
+        return false, "TeleportToPlaceInstance pcall failed"
+    end
+
+    -- Wait up to 8s for either an init-failure callback or the script to be teleported away.
+    local t = 0
+    while t < 8 and not failedReason do
+        task.wait(0.5)
+        t = t + 0.5
+    end
+
+    if conn then pcall(function() conn:Disconnect() end) end
+
+    if failedReason then
+        return false, failedReason
+    end
+    return true
+end
+
+local function serverHop()
+    if Env.OllieV3.HopBusy then return end
+    Env.OllieV3.HopBusy = true
+
+    local placeId = game.PlaceId
+    local jobId   = game.JobId
+    local url     = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
+
+    setStatus("Ищем свободный сервер...")
+    log("Хоп: запрос", url)
+
+    local body = httpGet(url)
+    if not body then
+        setStatus("HTTP запрос не удался")
+        log("Хоп: HTTP пусто, fallback Teleport(placeId)")
+        pcall(function() TeleportService:Teleport(placeId, LocalPlayer) end)
+        Env.OllieV3.HopBusy = false
+        return
+    end
+
+    local parsedOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+    if not parsedOk or type(decoded) ~= "table" or type(decoded.data) ~= "table" then
+        setStatus("JSON парс не удался")
+        log("Хоп: JSON bad")
+        Env.OllieV3.HopBusy = false
+        return
+    end
+
+    local candidates = {}
+    for i = 1, #decoded.data do
+        local srv = decoded.data[i]
+        if type(srv) == "table" and srv.id and srv.id ~= jobId then
+            local playing = tonumber(srv.playing) or 0
+            local maxP    = tonumber(srv.maxPlayers) or 20
+            if playing >= 1 and playing < maxP then
+                candidates[#candidates + 1] = srv
             end
         end
     end
-    HopBusy = false
+    log("Хоп: кандидатов", tostring(#candidates))
+
+    if #candidates == 0 then
+        setStatus("Пустой список, fallback Teleport")
+        pcall(function() TeleportService:Teleport(placeId, LocalPlayer) end)
+        Env.OllieV3.HopBusy = false
+        return
+    end
+
+    -- prefer quiet-but-alive servers
+    table.sort(candidates, function(a, b)
+        return (tonumber(a.playing) or 0) < (tonumber(b.playing) or 0)
+    end)
+
+    local tried = 0
+    for i = 1, #candidates do
+        if tried >= 8 then break end
+        tried = tried + 1
+        local srv = candidates[i]
+        setStatus("Хоп → " .. tostring(srv.id):sub(1, 8) .. " (" .. tostring(srv.playing) .. "/" .. tostring(srv.maxPlayers or "?") .. ")")
+        log("Хоп: сервер найден", tostring(srv.id), "players", tostring(srv.playing))
+        local ok, reason = tryTeleportInstance(placeId, srv.id)
+        if ok then
+            Env.OllieV3.HopBusy = false
+            return
+        end
+        log("Хоп: инстанс не удался:", tostring(reason))
+        setStatus("Не вышло, пробуем следующий...")
+    end
+
+    setStatus("Все инстансы не вышли, обычный телепорт")
+    log("Хоп: fallback Teleport(placeId)")
+    pcall(function() TeleportService:Teleport(placeId, LocalPlayer) end)
+    Env.OllieV3.HopBusy = false
 end
 
 if HopButtonRef then
-    HopButtonRef.MouseButton1Click:Connect(function()
-        task.spawn(serverHop)
-    end)
+    HopButtonRef.MouseButton1Click:Connect(function() task.spawn(serverHop) end)
 end
 
 -- ============================================================================
--- 4. ДОСТУП К REMOTES И ВЫБОР КОМАНДЫ (PIRATES)
+-- 7. CommF_ — hard wait + cached handle
 -- ============================================================================
 local CachedCommF = nil
 local function getCommF()
-    if CachedCommF and CachedCommF.Parent then
-        return CachedCommF
-    end
-    local rem = ReplicatedStorage:FindFirstChild("Remotes")
-    if rem then
-        CachedCommF = rem:FindFirstChild("CommF_")
+    if CachedCommF and CachedCommF.Parent then return CachedCommF end
+    local ok, rem = pcall(function()
+        return ReplicatedStorage:WaitForChild("Remotes", 10)
+    end)
+    if ok and rem then
+        local ok2, cf = pcall(function() return rem:WaitForChild("CommF_", 10) end)
+        if ok2 and cf then CachedCommF = cf end
     end
     return CachedCommF
 end
 
+-- ============================================================================
+-- 8. Team select
+-- ============================================================================
 local function selectPiratesTeam()
     if not LocalPlayer.Team or (LocalPlayer.Team.Name ~= "Pirates" and LocalPlayer.Team.Name ~= "Marines") then
         setStatus("Выбор команды Pirates...")
-        pcall(function()
-            local comm = getCommF()
-            if comm then
-                comm:InvokeServer("SetTeam", "Pirates")
-            end
-        end)
+        local comm = getCommF()
+        if comm then
+            pcall(function() comm:InvokeServer("SetTeam", "Pirates") end)
+            log("Team: SetTeam Pirates")
+        end
         task.wait(1.2)
         return false
     end
@@ -267,39 +378,39 @@ local function selectPiratesTeam()
 end
 
 -- ============================================================================
--- 5. БАЗА КВЕСТОВ ПЕРВОГО, ВТОРОГО И ТРЕТЬЕГО МОРЯ
+-- 9. Quest table
 -- ============================================================================
 local PlaceId = game.PlaceId
-local IsSea1 = (PlaceId == 2753915549)
-local IsSea2 = (PlaceId == 4442272183)
-local IsSea3 = (PlaceId == 7449423635)
+local IsSea1  = (PlaceId == 2753915549)
+local IsSea2  = (PlaceId == 4442272183)
+local IsSea3  = (PlaceId == 7449423635)
 
 local QuestsSea1 = {
-    {Min = 1, Max = 9, Mob = "Bandit", QName = "BanditQuest1", QNum = 1, QPos = CFrame.new(1059, 16, 1549), MPos = CFrame.new(1145, 17, 1634)},
-    {Min = 10, Max = 14, Mob = "Monkey", QName = "JungleQuest", QNum = 1, QPos = CFrame.new(-1598, 36, 153), MPos = CFrame.new(-1448, 50, 63)},
-    {Min = 15, Max = 29, Mob = "Gorilla", QName = "JungleQuest", QNum = 2, QPos = CFrame.new(-1598, 36, 153), MPos = CFrame.new(-1129, 40, -525)},
-    {Min = 30, Max = 39, Mob = "Pirate", QName = "BuggyQuest1", QNum = 1, QPos = CFrame.new(-1140, 4, 3829), MPos = CFrame.new(-1201, 4, 3916)},
-    {Min = 40, Max = 59, Mob = "Brute", QName = "BuggyQuest1", QNum = 2, QPos = CFrame.new(-1140, 4, 3829), MPos = CFrame.new(-1145, 15, 4350)},
-    {Min = 60, Max = 74, Mob = "Desert Bandit", QName = "DesertQuest", QNum = 1, QPos = CFrame.new(894, 6, 4390), MPos = CFrame.new(924, 6, 4481)},
-    {Min = 75, Max = 89, Mob = "Desert Officer", QName = "DesertQuest", QNum = 2, QPos = CFrame.new(894, 6, 4390), MPos = CFrame.new(1608, 9, 4371)},
-    {Min = 90, Max = 99, Mob = "Snow Bandit", QName = "SnowQuest", QNum = 1, QPos = CFrame.new(1389, 87, -1298), MPos = CFrame.new(1354, 87, -1393)},
-    {Min = 100, Max = 119, Mob = "Snowman", QName = "SnowQuest", QNum = 2, QPos = CFrame.new(1389, 87, -1298), MPos = CFrame.new(1201, 144, -1550)},
-    {Min = 120, Max = 149, Mob = "Chief Petty Officer", QName = "MarineQuest2", QNum = 1, QPos = CFrame.new(-5039, 28, 4324), MPos = CFrame.new(-4881, 22, 4273)},
-    {Min = 150, Max = 174, Mob = "Sky Bandit", QName = "SkyQuest", QNum = 1, QPos = CFrame.new(-4839, 717, -2619), MPos = CFrame.new(-4953, 295, -2899)},
-    {Min = 175, Max = 189, Mob = "Dark Master", QName = "SkyQuest", QNum = 2, QPos = CFrame.new(-4839, 717, -2619), MPos = CFrame.new(-5259, 391, -2229)},
-    {Min = 190, Max = 209, Mob = "Prisoner", QName = "PrisonerQuest", QNum = 1, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5098, 0, 474)},
-    {Min = 210, Max = 249, Mob = "Dangerous Prisoner", QName = "PrisonerQuest", QNum = 2, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5654, 15, 866)},
-    {Min = 250, Max = 299, Mob = "Toga Warrior", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580, 7, -2986), MPos = CFrame.new(-1820, 51, -2740)},
-    {Min = 300, Max = 324, Mob = "Military Soldier", QName = "MagmaQuest", QNum = 1, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5411, 11, 8454)},
-    {Min = 325, Max = 374, Mob = "Military Spy", QName = "MagmaQuest", QNum = 2, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5802, 86, 8828)},
-    {Min = 375, Max = 399, Mob = "Fishman Warrior", QName = "FishmanQuest", QNum = 1, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(60878, 18, 1543)},
-    {Min = 400, Max = 449, Mob = "Fishman Commando", QName = "FishmanQuest", QNum = 2, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(61922, 18, 1493)},
-    {Min = 450, Max = 474, Mob = "God's Guard", QName = "SkyExp1Quest", QNum = 1, QPos = CFrame.new(-4721, 843, -1949), MPos = CFrame.new(-4710, 845, -1927)},
-    {Min = 475, Max = 524, Mob = "Shanda", QName = "SkyExp1Quest", QNum = 2, QPos = CFrame.new(-7859, 5544, -381), MPos = CFrame.new(-7678, 5566, -497)},
-    {Min = 525, Max = 549, Mob = "Royal Squad", QName = "SkyExp2Quest", QNum = 1, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7624, 5658, -1467)},
-    {Min = 550, Max = 624, Mob = "Royal Soldier", QName = "SkyExp2Quest", QNum = 2, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7836, 5645, -1790)},
-    {Min = 625, Max = 649, Mob = "Galley Pirate", QName = "FountainQuest", QNum = 1, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5551, 78, 3930)},
-    {Min = 650, Max = 3000, Mob = "Galley Captain", QName = "FountainQuest", QNum = 2, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5649, 38, 4936)}
+    {Min = 1,   Max = 9,    Mob = "Bandit",              QName = "BanditQuest1",  QNum = 1, QPos = CFrame.new(1059, 16, 1549),       MPos = CFrame.new(1145, 17, 1634)},
+    {Min = 10,  Max = 14,   Mob = "Monkey",              QName = "JungleQuest",   QNum = 1, QPos = CFrame.new(-1598, 36, 153),       MPos = CFrame.new(-1448, 50, 63)},
+    {Min = 15,  Max = 29,   Mob = "Gorilla",             QName = "JungleQuest",   QNum = 2, QPos = CFrame.new(-1598, 36, 153),       MPos = CFrame.new(-1129, 40, -525)},
+    {Min = 30,  Max = 39,   Mob = "Pirate",              QName = "BuggyQuest1",   QNum = 1, QPos = CFrame.new(-1140, 4, 3829),       MPos = CFrame.new(-1201, 4, 3916)},
+    {Min = 40,  Max = 59,   Mob = "Brute",               QName = "BuggyQuest1",   QNum = 2, QPos = CFrame.new(-1140, 4, 3829),       MPos = CFrame.new(-1145, 15, 4350)},
+    {Min = 60,  Max = 74,   Mob = "Desert Bandit",       QName = "DesertQuest",   QNum = 1, QPos = CFrame.new(894, 6, 4390),         MPos = CFrame.new(924, 6, 4481)},
+    {Min = 75,  Max = 89,   Mob = "Desert Officer",      QName = "DesertQuest",   QNum = 2, QPos = CFrame.new(894, 6, 4390),         MPos = CFrame.new(1608, 9, 4371)},
+    {Min = 90,  Max = 99,   Mob = "Snow Bandit",         QName = "SnowQuest",     QNum = 1, QPos = CFrame.new(1389, 87, -1298),      MPos = CFrame.new(1354, 87, -1393)},
+    {Min = 100, Max = 119,  Mob = "Snowman",             QName = "SnowQuest",     QNum = 2, QPos = CFrame.new(1389, 87, -1298),      MPos = CFrame.new(1201, 144, -1550)},
+    {Min = 120, Max = 149,  Mob = "Chief Petty Officer", QName = "MarineQuest2",  QNum = 1, QPos = CFrame.new(-5039, 28, 4324),      MPos = CFrame.new(-4881, 22, 4273)},
+    {Min = 150, Max = 174,  Mob = "Sky Bandit",          QName = "SkyQuest",      QNum = 1, QPos = CFrame.new(-4839, 717, -2619),     MPos = CFrame.new(-4953, 295, -2899)},
+    {Min = 175, Max = 189,  Mob = "Dark Master",         QName = "SkyQuest",      QNum = 2, QPos = CFrame.new(-4839, 717, -2619),     MPos = CFrame.new(-5259, 391, -2229)},
+    {Min = 190, Max = 209,  Mob = "Prisoner",            QName = "PrisonerQuest", QNum = 1, QPos = CFrame.new(5308, 2, 475),         MPos = CFrame.new(5098, 0, 474)},
+    {Min = 210, Max = 249,  Mob = "Dangerous Prisoner",  QName = "PrisonerQuest", QNum = 2, QPos = CFrame.new(5308, 2, 475),         MPos = CFrame.new(5654, 15, 866)},
+    {Min = 250, Max = 299,  Mob = "Toga Warrior",        QName = "ColosseumQuest",QNum = 1, QPos = CFrame.new(-1580, 7, -2986),     MPos = CFrame.new(-1820, 51, -2740)},
+    {Min = 300, Max = 324,  Mob = "Military Soldier",    QName = "MagmaQuest",    QNum = 1, QPos = CFrame.new(-5313, 12, 8515),      MPos = CFrame.new(-5411, 11, 8454)},
+    {Min = 325, Max = 374,  Mob = "Military Spy",        QName = "MagmaQuest",    QNum = 2, QPos = CFrame.new(-5313, 12, 8515),      MPos = CFrame.new(-5802, 86, 8828)},
+    {Min = 375, Max = 399,  Mob = "Fishman Warrior",     QName = "FishmanQuest",  QNum = 1, QPos = CFrame.new(61122, 18, 1569),      MPos = CFrame.new(60878, 18, 1543)},
+    {Min = 400, Max = 449,  Mob = "Fishman Commando",    QName = "FishmanQuest",  QNum = 2, QPos = CFrame.new(61122, 18, 1569),      MPos = CFrame.new(61922, 18, 1493)},
+    {Min = 450, Max = 474,  Mob = "God's Guard",         QName = "SkyExp1Quest",  QNum = 1, QPos = CFrame.new(-4721, 843, -1949),    MPos = CFrame.new(-4710, 845, -1927)},
+    {Min = 475, Max = 524,  Mob = "Shanda",              QName = "SkyExp1Quest",  QNum = 2, QPos = CFrame.new(-7859, 5544, -381),    MPos = CFrame.new(-7678, 5566, -497)},
+    {Min = 525, Max = 549,  Mob = "Royal Squad",         QName = "SkyExp2Quest",  QNum = 1, QPos = CFrame.new(-7906, 5634, -1411),   MPos = CFrame.new(-7624, 5658, -1467)},
+    {Min = 550, Max = 624,  Mob = "Royal Soldier",       QName = "SkyExp2Quest",  QNum = 2, QPos = CFrame.new(-7906, 5634, -1411),   MPos = CFrame.new(-7836, 5645, -1790)},
+    {Min = 625, Max = 649,  Mob = "Galley Pirate",       QName = "FountainQuest", QNum = 1, QPos = CFrame.new(5259, 38, 4050),      MPos = CFrame.new(5551, 78, 3930)},
+    {Min = 650, Max = 3000, Mob = "Galley Captain",      QName = "FountainQuest", QNum = 2, QPos = CFrame.new(5259, 38, 4050),      MPos = CFrame.new(5649, 38, 4936)},
 }
 
 local function getLevel()
@@ -313,53 +424,62 @@ local function getQuestForLevel()
     local lvl = getLevel()
     for i = 1, #QuestsSea1 do
         local q = QuestsSea1[i]
-        if lvl >= q.Min and lvl <= q.Max then
-            return q, lvl
-        end
+        if lvl >= q.Min and lvl <= q.Max then return q, lvl end
     end
     return QuestsSea1[#QuestsSea1], lvl
 end
 
-local function isQuestActiveForMob(mobName)
+local function isQuestVisible()
     local pGui = LocalPlayer:FindFirstChild("PlayerGui")
     local main = pGui and pGui:FindFirstChild("Main")
     local qFrame = main and main:FindFirstChild("Quest")
-    if not qFrame or not qFrame.Visible then
-        return false
-    end
+    return qFrame and qFrame.Visible or false
+end
+
+local function getQuestTitleText()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local main = pGui and pGui:FindFirstChild("Main")
+    local qFrame = main and main:FindFirstChild("Quest")
+    if not qFrame or not qFrame.Visible then return nil end
     local cont = qFrame:FindFirstChild("Container")
     local qTitle = cont and cont:FindFirstChild("QuestTitle")
     local titleLbl = qTitle and qTitle:FindFirstChild("Title")
-    if titleLbl and titleLbl:IsA("TextLabel") then
-        local txt = string.lower(titleLbl.Text)
-        if not string.find(txt, string.lower(mobName), 1, true) then
-            local comm = getCommF()
-            if comm then
-                pcall(function() comm:InvokeServer("AbandonQuest") end)
-            end
-            return false
-        end
+    if titleLbl and titleLbl:IsA("TextLabel") then return titleLbl.Text end
+    return nil
+end
+
+local function isQuestActiveForMob(mobName)
+    local txt = getQuestTitleText()
+    if not txt then return false end
+    if string.find(string.lower(txt), string.lower(mobName), 1, true) then
+        return true
     end
-    return true
+    local comm = getCommF()
+    if comm then
+        pcall(function() comm:InvokeServer("AbandonQuest") end)
+        log("Квест не тот ('" .. tostring(txt) .. "'), сбросил")
+    end
+    return false
 end
 
 -- ============================================================================
--- 6. ПЛАВНОЕ ДВИЖЕНИЕ (НЕБЛОКИРУЮЩИЙ STEP + NOCLIP БЕЗ VECTOR3.ZERO)
+-- 10. Movement — noclip + smooth step, plus grounded snap helper
 -- ============================================================================
 local DesiredCFrame = nil
-local ZeroVec = Vector3.new(0, 0, 0)
 
 RunService.Heartbeat:Connect(function(dt)
     if not Env.OllieV3.Enabled then return end
     local char = LocalPlayer.Character
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return end
 
     pcall(function()
-        root.Velocity = ZeroVec
-        root.RotVelocity = ZeroVec
+        root.AssemblyLinearVelocity = ZERO
+        root.AssemblyAngularVelocity = ZERO
+        root.Velocity = ZERO
+        root.RotVelocity = ZERO
     end)
 
     local parts = char:GetDescendants()
@@ -373,25 +493,38 @@ RunService.Heartbeat:Connect(function(dt)
     if DesiredCFrame then
         local curPos = root.Position
         local dstPos = DesiredCFrame.Position
-        local delta = dstPos - curPos
-        local dist = delta.Magnitude
-
+        local delta  = dstPos - curPos
+        local dist   = delta.Magnitude
         if dist <= 6 then
             root.CFrame = DesiredCFrame
         else
             local step = math.min(dist, Env.OllieV3.TweenSpeed * dt)
-            local nextPos = curPos + (delta.Unit * step)
-            root.CFrame = CFrame.new(nextPos)
+            root.CFrame = CFrame.new(curPos + delta.Unit * step)
         end
     end
 end)
 
+-- Snap root exactly to ground-level at `pos`, kill velocity, brief settle.
+local function snapToGround(pos)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    pcall(function()
+        root.AssemblyLinearVelocity  = ZERO
+        root.AssemblyAngularVelocity = ZERO
+        root.Velocity    = ZERO
+        root.RotVelocity = ZERO
+        root.CFrame = CFrame.new(pos.X, pos.Y + 3, pos.Z)
+    end)
+end
+
 -- ============================================================================
--- 7. БОЕВОЙ МОДУЛЬ (ЭКИПИРОВКА, BRING MOBS, НАНЕСЕНИЕ УРОНА)
+-- 11. Combat
 -- ============================================================================
 local function equipWeapon()
     local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
     if not char or not hum then return nil end
 
     local currentTool = char:FindFirstChildOfClass("Tool")
@@ -405,14 +538,14 @@ local function equipWeapon()
         for i = 1, #items do
             local it = items[i]
             if it:IsA("Tool") and (it.ToolTip == Env.OllieV3.WeaponType or it.Name == "Combat") then
-                hum:EquipTool(it)
+                pcall(function() hum:EquipTool(it) end)
                 return it
             end
         end
-        local fallback = bp:FindFirstChildOfClass("Tool")
-        if fallback then
-            hum:EquipTool(fallback)
-            return fallback
+        local fb = bp:FindFirstChildOfClass("Tool")
+        if fb then
+            pcall(function() hum:EquipTool(fb) end)
+            return fb
         end
     end
     return char:FindFirstChildOfClass("Tool")
@@ -434,13 +567,12 @@ local function bringMobsAround(mobName, centerPos)
         local m = list[i]
         if m.Name == mobName then
             local mRoot = m:FindFirstChild("HumanoidRootPart")
-            local mHum = m:FindFirstChildOfClass("Humanoid")
+            local mHum  = m:FindFirstChildOfClass("Humanoid")
             if mRoot and mHum and mHum.Health > 0 then
                 local d = (mRoot.Position - centerPos).Magnitude
                 if d <= 250 then
                     pcall(function()
                         mRoot.CanCollide = false
-                        mRoot.Velocity = ZeroVec
                         mRoot.CFrame = CFrame.new(centerPos)
                     end)
                 end
@@ -461,9 +593,7 @@ local function attackTarget(mob)
     end
 
     local tool = equipWeapon()
-    if tool then
-        pcall(function() tool:Activate() end)
-    end
+    if tool then pcall(function() tool:Activate() end) end
 
     pcall(function()
         local modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -485,7 +615,7 @@ local function attackTarget(mob)
 end
 
 -- ============================================================================
--- 8. АВТО-СТАТЫ И ПОКУПКА ФРУКТОВ (КАЖДЫЕ 4 СЕК)
+-- 12. Auto-stats + fruit roll (every 4s)
 -- ============================================================================
 task.spawn(function()
     while task.wait(4) do
@@ -503,9 +633,7 @@ task.spawn(function()
                     end)
                 end
                 if Env.OllieV3.AutoRollFruit then
-                    pcall(function()
-                        comm:InvokeServer("Cousin", "Buy")
-                    end)
+                    pcall(function() comm:InvokeServer("Cousin", "Buy") end)
                 end
             end
         end
@@ -513,7 +641,7 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- 9. ОСНОВНОЙ РАБОЧИЙ ЦИКЛ (БЕЗ ОПЕРАТОРА CONTINUE - 100% LUA 5.1 SAFE)
+-- 13. MAIN LOOP — grounded quest start + verified retry
 -- ============================================================================
 task.spawn(function()
     while task.wait(Env.OllieV3.AttackDelay) do
@@ -521,90 +649,116 @@ task.spawn(function()
             DesiredCFrame = nil
         else
             pcall(function()
-                if selectPiratesTeam() then
-                    local char = LocalPlayer.Character
-                    local root = char and char:FindFirstChild("HumanoidRootPart")
-                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                if not selectPiratesTeam() then
+                    return
+                end
 
-                    if not char or not root or not hum or hum.Health <= 0 then
-                        setStatus("Ожидание спавна персонажа...")
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+
+                if not char or not root or not hum or hum.Health <= 0 then
+                    setStatus("Ожидание спавна персонажа...")
+                    return
+                end
+
+                -- Player evasion
+                if Env.OllieV3.PlayerEvasion then
+                    local all = Players:GetPlayers()
+                    for i = 1, #all do
+                        local p = all[i]
+                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                            local pDist = (root.Position - p.Character.HumanoidRootPart.Position).Magnitude
+                            if pDist < Env.OllieV3.SafePlayerDist then
+                                setStatus("Игрок рядом! Меняем сервер...")
+                                serverHop()
+                                return
+                            end
+                        end
+                    end
+                end
+
+                local qData, myLvl = getQuestForLevel()
+
+                -- auto-travel to sea 2 at 700
+                if IsSea1 and myLvl >= 700 then
+                    local comm = getCommF()
+                    if comm then pcall(function() comm:InvokeServer("TravelDressrosa") end) end
+                end
+
+                if not isQuestActiveForMob(qData.Mob) then
+                    -- Approach NPC on the horizontal plane only
+                    local dxz = Vector3.new(root.Position.X - qData.QPos.Position.X, 0, root.Position.Z - qData.QPos.Position.Z)
+                    local horiz = dxz.Magnitude
+                    setStatus("К NPC (" .. tostring(math.floor(horiz)) .. "м)", myLvl, qData.QName)
+
+                    if horiz > 10 then
+                        DesiredCFrame = qData.QPos
                     else
-                        -- Проверка дистанции до других игроков
-                        local threatFound = false
-                        if Env.OllieV3.PlayerEvasion then
-                            local allPlrs = Players:GetPlayers()
-                            for i = 1, #allPlrs do
-                                local p = allPlrs[i]
-                                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                                    local pDist = (root.Position - p.Character.HumanoidRootPart.Position).Magnitude
-                                    if pDist < Env.OllieV3.SafePlayerDist then
-                                        threatFound = true
-                                        setStatus("Игрок рядом! Меняем сервер...")
-                                        serverHop()
-                                        break
-                                    end
-                                end
-                            end
-                        end
+                        -- Close enough: kill movement, land, then invoke
+                        DesiredCFrame = nil
+                        if os.clock() >= Env.OllieV3.NextQuestAttempt then
+                            Env.OllieV3.NextQuestAttempt = os.clock() + 1.0
+                            snapToGround(qData.QPos.Position)
+                            task.wait(0.15)
 
-                        if not threatFound then
-                            local qData, myLvl = getQuestForLevel()
-
-                            -- Автопереход во Второе море по достижении 700 уровня
-                            if IsSea1 and myLvl >= 700 then
-                                local comm = getCommF()
-                                if comm then
-                                    pcall(function() comm:InvokeServer("TravelDressrosa") end)
-                                end
+                            local comm = getCommF()
+                            if not comm then
+                                log("StartQuest: CommF_ ещё не готов, ждём")
+                                return
                             end
 
-                            if not isQuestActiveForMob(qData.Mob) then
-                                local npcDist = (root.Position - qData.QPos.Position).Magnitude
-                                setStatus("Летим брать квест (" .. tostring(math.floor(npcDist)) .. "м)", myLvl, qData.QName)
-                                DesiredCFrame = qData.QPos
-
-                                if npcDist <= 14 then
-                                    local comm = getCommF()
-                                    if comm then
-                                        comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
-                                        task.wait(0.4)
-                                    end
-                                end
+                            log("Пытаюсь взять квест [" .. tostring(qData.QName) .. " " .. tostring(qData.QNum) .. "]...")
+                            local called = pcall(function()
+                                comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
+                            end)
+                            if not called then
+                                log("Ошибка вызова StartQuest: pcall fail")
                             else
-                                local enemies = Workspace:FindFirstChild("Enemies")
-                                local target = nil
-                                if enemies then
-                                    local children = enemies:GetChildren()
-                                    for i = 1, #children do
-                                        local m = children[i]
-                                        if m.Name == qData.Mob then
-                                            local mh = m:FindFirstChildOfClass("Humanoid")
-                                            local mr = m:FindFirstChild("HumanoidRootPart")
-                                            if mh and mr and mh.Health > 0 then
-                                                target = m
-                                                break
-                                            end
-                                        end
-                                    end
-                                end
+                                log("StartQuest отправлен, жду подтверждения")
+                            end
 
-                                if target then
-                                    local mPos = target.HumanoidRootPart.Position
-                                    local distToMob = (root.Position - mPos).Magnitude
-                                    setStatus("Бьем: " .. target.Name .. " [HP: " .. tostring(math.floor(target.Humanoid.Health)) .. "]", myLvl, qData.QName)
-                                    DesiredCFrame = CFrame.new(mPos + Vector3.new(0, Env.OllieV3.HoverHeight, 0))
+                            task.wait(0.6)
 
-                                    if distToMob <= 40 then
-                                        bringMobsAround(qData.Mob, mPos)
-                                        attackTarget(target)
-                                    end
-                                else
-                                    local spDist = (root.Position - qData.MPos.Position).Magnitude
-                                    setStatus("Ждем респавна " .. qData.Mob .. " (" .. tostring(math.floor(spDist)) .. "м)", myLvl, qData.QName)
-                                    DesiredCFrame = qData.MPos * CFrame.new(0, 20, 0)
+                            if isQuestVisible() then
+                                log("Квест успешно взят: " .. tostring(getQuestTitleText() or "?"))
+                            else
+                                log("Квест не подтверждён, повтор через 1с")
+                            end
+                        end
+                    end
+                else
+                    -- Quest active → find mob
+                    local enemies = Workspace:FindFirstChild("Enemies")
+                    local target = nil
+                    if enemies then
+                        local kids = enemies:GetChildren()
+                        for i = 1, #kids do
+                            local m = kids[i]
+                            if m.Name == qData.Mob then
+                                local mh = m:FindFirstChildOfClass("Humanoid")
+                                local mr = m:FindFirstChild("HumanoidRootPart")
+                                if mh and mr and mh.Health > 0 then
+                                    target = m
+                                    break
                                 end
                             end
                         end
+                    end
+
+                    if target then
+                        local mPos = target.HumanoidRootPart.Position
+                        local distToMob = (root.Position - mPos).Magnitude
+                        setStatus("Бьем: " .. target.Name .. " [HP: " .. tostring(math.floor(target.Humanoid.Health)) .. "]", myLvl, qData.QName)
+                        DesiredCFrame = CFrame.new(mPos + Vector3.new(0, Env.OllieV3.HoverHeight, 0))
+                        if distToMob <= 40 then
+                            bringMobsAround(qData.Mob, mPos)
+                            attackTarget(target)
+                        end
+                    else
+                        local spDist = (root.Position - qData.MPos.Position).Magnitude
+                        setStatus("Ждем респавна " .. qData.Mob .. " (" .. tostring(math.floor(spDist)) .. "м)", myLvl, qData.QName)
+                        DesiredCFrame = qData.MPos * CFrame.new(0, 20, 0)
                     end
                 end
             end)
