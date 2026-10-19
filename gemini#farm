@@ -1,5 +1,5 @@
--- [[ BLOX FRUITS AUTO-FARM V3.1 - DELTA ANDROID SAFE ]] --
--- Lua 5.1 / Luau: без 'continue', без Vector3.zero, без CoreGui
+-- [[ BLOX FRUITS AUTO-FARM V3.1 - PATCHED, NOT LIVE-TESTED ]] --
+-- Luau. Исправлены обнаруженные логические ошибки; актуальность remotes/координат не подтверждена.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -28,7 +28,7 @@ Env.OllieV3 = {
     Session = SessionId, -- повторный запуск скрипта останавливает старые циклы
     Enabled = true,
     AutoStats = true,
-    AutoRollFruit = true,
+    AutoRollFruit = false, -- включай вручную: функция тратит внутриигровую валюту
     BringMobs = true,
     PlayerEvasion = true,
     SafePlayerDist = 80,
@@ -44,6 +44,9 @@ Env.OllieV3 = {
     HopMaxTries = 8,       -- сколько серверов пробовать за один хоп
     HopCooldown = 15       -- пауза между автоматическими хопами
 }
+
+-- Важно: после обновления First Sea статические QPos/MPos и remote-вызовы могут устареть.
+-- Код ниже исправляет известные локальные ошибки, но не подтверждает совместимость с текущей игрой.
 
 local function log(msg)
     print("[OLLIE V3] " .. tostring(msg))
@@ -113,7 +116,7 @@ end
 local function fetchServerPage(cursor)
     local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
     if cursor then
-        url = url .. "&cursor=" .. tostring(cursor)
+        url = url .. "&cursor=" .. HttpService:UrlEncode(tostring(cursor))
     end
 
     local body = nil
@@ -122,7 +125,7 @@ local function fetchServerPage(cursor)
     if reqFn then
         local ok, res = pcall(reqFn, { Url = url, Method = "GET", Headers = { ["Accept"] = "application/json" } })
         if ok and type(res) == "table" then
-            local status = res.StatusCode or res.Status
+            local status = tonumber(res.StatusCode or res.Status)
             if status == 429 then
                 log("API вернул 429 (rate limit)")
                 return nil, "429"
@@ -582,21 +585,56 @@ end
 -- 7. ДВИЖЕНИЕ (HEARTBEAT) + NOCLIP + ПОСАДКА НА ЗЕМЛЮ
 -- ============================================================================
 local DesiredCFrame = nil
-local LandingMode = false -- true: у цели коллизии включены, персонаж стоит на земле
+local LandingMode = false -- true: вернуть коллизии возле точки посадки
+
+-- Запоминаем исходное CanCollide для каждой детали. Раньше скрипт только выключал
+-- коллизии и никогда не включал их обратно, из-за чего персонаж мог проваливаться.
+local OriginalCollisions = setmetatable({}, { __mode = "k" })
+local function setCharacterCollisionEnabled(enabled)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local parts = char:GetDescendants()
+    for i = 1, #parts do
+        local part = parts[i]
+        if part:IsA("BasePart") then
+            if enabled then
+                local original = OriginalCollisions[part]
+                if original ~= nil then
+                    pcall(function() part.CanCollide = original end)
+                    OriginalCollisions[part] = nil
+                end
+            else
+                if OriginalCollisions[part] == nil then
+                    OriginalCollisions[part] = part.CanCollide
+                end
+                if part.CanCollide then
+                    pcall(function() part.CanCollide = false end)
+                end
+            end
+        end
+    end
+end
 
 local hbConn
 hbConn = RunService.Heartbeat:Connect(function(dt)
     if Env.OllieV3.Session ~= SessionId then
+        setCharacterCollisionEnabled(true)
         if hbConn then hbConn:Disconnect() end
         return
     end
-    if not Env.OllieV3.Enabled then return end
+    if not Env.OllieV3.Enabled then
+        setCharacterCollisionEnabled(true)
+        return
+    end
 
     local char = LocalPlayer.Character
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if not root or not hum or hum.Health <= 0 then return end
+    if not root or not hum or hum.Health <= 0 then
+        setCharacterCollisionEnabled(true)
+        return
+    end
 
     pcall(function()
         root.AssemblyLinearVelocity = ZeroVec
@@ -608,15 +646,9 @@ hbConn = RunService.Heartbeat:Connect(function(dt)
         nearTarget = (root.Position - DesiredCFrame.Position).Magnitude < 12
     end
 
-    if not (LandingMode and nearTarget) then
-        local parts = char:GetDescendants()
-        for i = 1, #parts do
-            local p = parts[i]
-            if p:IsA("BasePart") and p.CanCollide then
-                p.CanCollide = false
-            end
-        end
-    end
+    -- Noclip only during travel; restore original collisions when landing, pausing,
+    -- dying, or stopping this script.
+    setCharacterCollisionEnabled(LandingMode and nearTarget)
 
     if DesiredCFrame then
         local curPos = root.Position
@@ -679,445 +711,4 @@ local function getGroundCFrame(npcCFrame)
             return Workspace:Raycast(origin, Vector3.new(0, -60, 0), params)
         end)
         if not ok or not res then break end
-        local model = res.Instance:FindFirstAncestorOfClass("Model")
-        if model and model:FindFirstChildOfClass("Humanoid") then
-            filter[#filter + 1] = model -- попали в NPC/моба: игнорируем и бросаем луч снова
-            params.FilterDescendantsInstances = filter
-        else
-            ground = res.Position
-            break
-        end
-    end
-
-    if ground then
-        return CFrame.new(ground + Vector3.new(0, offset, 0))
-    end
-    return CFrame.new(npcCFrame.Position)
-end
-
--- ============================================================================
--- 8. БОЕВОЙ МОДУЛЬ
--- ============================================================================
-local function equipWeapon()
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not char or not hum then return nil end
-
-    local currentTool = char:FindFirstChildOfClass("Tool")
-    if currentTool and (currentTool.ToolTip == Env.OllieV3.WeaponType or currentTool.Name == "Combat") then
-        return currentTool
-    end
-
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp then
-        local items = bp:GetChildren()
-        for i = 1, #items do
-            local it = items[i]
-            if it:IsA("Tool") and (it.ToolTip == Env.OllieV3.WeaponType or it.Name == "Combat") then
-                hum:EquipTool(it)
-                return it
-            end
-        end
-        local fallback = bp:FindFirstChildOfClass("Tool")
-        if fallback then
-            hum:EquipTool(fallback)
-            return fallback
-        end
-    end
-    return char:FindFirstChildOfClass("Tool")
-end
-
-local function bringMobsAround(mobName, centerPos)
-    if not Env.OllieV3.BringMobs then return end
-    local enemies = Workspace:FindFirstChild("Enemies")
-    if not enemies then return end
-
-    pcall(function()
-        if sethiddenproperty then
-            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
-        end
-    end)
-
-    local list = enemies:GetChildren()
-    for i = 1, #list do
-        local m = list[i]
-        if m.Name == mobName then
-            local mRoot = m:FindFirstChild("HumanoidRootPart")
-            local mHum = m:FindFirstChildOfClass("Humanoid")
-            if mRoot and mHum and mHum.Health > 0 then
-                local d = (mRoot.Position - centerPos).Magnitude
-                if d <= 250 then
-                    pcall(function()
-                        mRoot.CanCollide = false
-                        mRoot.AssemblyLinearVelocity = ZeroVec
-                        mRoot.CFrame = CFrame.new(centerPos)
-                    end)
-                end
-            end
-        end
-    end
-end
-
-local function attackTarget(mob)
-    local char = LocalPlayer.Character
-    if not char then return end
-
-    if not char:FindFirstChild("HasBuso") then
-        pcall(function()
-            local comm = getCommF()
-            if comm then comm:InvokeServer("Buso") end
-        end)
-    end
-
-    local tool = equipWeapon()
-    if tool then
-        pcall(function() tool:Activate() end)
-    end
-
-    pcall(function()
-        local modules = ReplicatedStorage:FindFirstChild("Modules")
-        local net = modules and modules:FindFirstChild("Net")
-        if net and mob and mob:FindFirstChild("HumanoidRootPart") then
-            local regAtk = net:FindFirstChild("RE/RegisterAttack")
-            local regHit = net:FindFirstChild("RE/RegisterHit")
-            if regAtk and regHit then
-                regAtk:FireServer(0)
-                regHit:FireServer(mob.HumanoidRootPart, {{mob, mob.HumanoidRootPart}})
-            end
-        end
-    end)
-
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton1(Vector2.new(400, 225))
-    end)
-end
-
--- ============================================================================
--- 9. ВЗЯТИЕ КВЕСТА (ПОСАДКА -> StartQuest -> ПРОВЕРКА Quest.Visible)
--- ============================================================================
-local ActiveQuestKey = nil
-local DialogKeywords = { "accept", "yes", "continue", "start", "next", "принять" }
-
--- Best-effort: если виден диалог NPC, пробуем нажать кнопку подтверждения
-local function handleDialogue()
-    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-    local main = pGui and pGui:FindFirstChild("Main")
-    local dlg = main and main:FindFirstChild("Dialogue")
-    if not dlg or not dlg:IsA("GuiObject") or not dlg.Visible then
-        return false
-    end
-
-    log("Виден диалог NPC — пробую подтвердить")
-    local pressed = false
-    local items = dlg:GetDescendants()
-    for i = 1, #items do
-        local b = items[i]
-        if (b:IsA("TextButton") or b:IsA("ImageButton")) and b.Visible then
-            local txt = string.lower(b:IsA("TextButton") and b.Text or b.Name)
-            for k = 1, #DialogKeywords do
-                if string.find(txt, DialogKeywords[k], 1, true) then
-                    pcall(function()
-                        if firesignal then
-                            firesignal(b.MouseButton1Click)
-                            firesignal(b.Activated)
-                        end
-                    end)
-                    pressed = true
-                    break
-                end
-            end
-        end
-    end
-    return pressed
-end
-
-local function takeQuest(q, lvl)
-    local comm = getCommF()
-    if not comm then
-        log("Ошибка: CommF_ недоступен, квест взять нельзя")
-        return false
-    end
-
-    for attempt = 1, Env.OllieV3.QuestMaxAttempts do
-        if not stillRunning() then
-            LandingMode = false
-            return false
-        end
-
-        -- 1) подлёт и посадка на землю у NPC
-        local groundCF = getGroundCFrame(q.QPos)
-        LandingMode = true
-        DesiredCFrame = groundCF
-        setStatus("Летим к NPC квеста (попытка " .. attempt .. ")", lvl, q.QName)
-
-        local startRoot = getRoot()
-        local flightTimeout = 30
-        if startRoot then
-            flightTimeout = (startRoot.Position - groundCF.Position).Magnitude / Env.OllieV3.TweenSpeed + 10
-        end
-        local arrived = waitUntilNear(groundCF.Position, Env.OllieV3.QuestStandDist, flightTimeout)
-
-        if not arrived then
-            log("Не удалось долететь до NPC (" .. q.QName .. "), попытка " .. attempt)
-        else
-            -- 2) гасим скорость, даём серверу увидеть позицию
-            local root = getRoot()
-            if root then
-                pcall(function()
-                    root.AssemblyLinearVelocity = ZeroVec
-                    root.AssemblyAngularVelocity = ZeroVec
-                end)
-            end
-            task.wait(0.4)
-            root = getRoot()
-            if root then
-                local d = (root.Position - q.QPos.Position).Magnitude
-                log("У NPC, дистанция: " .. string.format("%.1f", d) .. " studs")
-            end
-
-            -- 3) диалог (если есть)
-            handleDialogue()
-
-            -- 4) вызов StartQuest
-            setStatus("Берём квест " .. q.QName .. "...", lvl, q.QName)
-            log("Пытаюсь взять квест " .. q.QName .. " [" .. tostring(q.QNum) .. "] (попытка " .. attempt .. ")...")
-            local ok, res = pcall(function()
-                return comm:InvokeServer("StartQuest", q.QName, q.QNum)
-            end)
-            if not ok then
-                log("Ошибка вызова StartQuest: " .. tostring(res))
-            else
-                log("StartQuest ответ сервера: " .. tostring(res))
-            end
-
-            -- 5) верификация по PlayerGui.Main.Quest.Visible
-            local confirmed = false
-            for i = 1, 8 do
-                task.wait(0.25)
-                if isQuestVisible() then
-                    confirmed = true
-                    break
-                end
-            end
-
-            if confirmed then
-                log("Квест успешно взят: " .. q.QName)
-                ActiveQuestKey = q.QName .. ":" .. tostring(q.QNum)
-                LandingMode = false
-                return true
-            end
-            log("Квест не появился в интерфейсе (попытка " .. attempt .. ")")
-        end
-
-        task.wait(Env.OllieV3.QuestRetryDelay)
-    end
-
-    LandingMode = false
-    log("Не удалось взять квест " .. q.QName .. " за " .. Env.OllieV3.QuestMaxAttempts .. " попыток")
-    return false
-end
-
-local function ensureQuest(q, lvl)
-    local key = q.QName .. ":" .. tostring(q.QNum)
-
-    if isQuestVisible() then
-        if ActiveQuestKey == key then
-            return true
-        end
-        -- квест есть, но мы не знаем чей: сверяем заголовок с именем моба
-        local title = getQuestTitle()
-        if title == nil or string.find(string.lower(title), string.lower(q.Mob), 1, true) then
-            ActiveQuestKey = key
-            return true
-        end
-        log("Активный квест не подходит (" .. tostring(title) .. "), отменяю...")
-        abandonQuest()
-        ActiveQuestKey = nil
-        task.wait(0.5)
-    else
-        ActiveQuestKey = nil
-    end
-
-    return takeQuest(q, lvl)
-end
-
--- ============================================================================
--- 10. ФАРМ МОБОВ
--- ============================================================================
-local function findTarget(mobName, fromPos)
-    local enemies = Workspace:FindFirstChild("Enemies")
-    if not enemies then return nil end
-    local best = nil
-    local bestDist = math.huge
-    local children = enemies:GetChildren()
-    for i = 1, #children do
-        local m = children[i]
-        if m.Name == mobName then
-            local mh = m:FindFirstChildOfClass("Humanoid")
-            local mr = m:FindFirstChild("HumanoidRootPart")
-            if mh and mr and mh.Health > 0 then
-                local d = (mr.Position - fromPos).Magnitude
-                if d < bestDist then
-                    best = m
-                    bestDist = d
-                end
-            end
-        end
-    end
-    return best
-end
-
-local function farmStep(q, lvl, root)
-    LandingMode = false
-    local target = findTarget(q.Mob, root.Position)
-
-    if target then
-        local mRoot = target:FindFirstChild("HumanoidRootPart")
-        local mHum = target:FindFirstChildOfClass("Humanoid")
-        if mRoot and mHum then
-            local mPos = mRoot.Position
-            setStatus("Бьем: " .. target.Name .. " [HP: " .. tostring(math.floor(mHum.Health)) .. "]", lvl, q.QName)
-            DesiredCFrame = CFrame.new(mPos + Vector3.new(0, Env.OllieV3.HoverHeight, 0))
-
-            local distToMob = (root.Position - mPos).Magnitude
-            if distToMob <= Env.OllieV3.AttackRange then
-                bringMobsAround(q.Mob, mPos)
-                attackTarget(target)
-            end
-        end
-    else
-        local spDist = (root.Position - q.MPos.Position).Magnitude
-        setStatus("Ждем респавна " .. q.Mob .. " (" .. tostring(math.floor(spDist)) .. "м)", lvl, q.QName)
-        DesiredCFrame = CFrame.new(q.MPos.Position + Vector3.new(0, 20, 0))
-    end
-end
-
--- ============================================================================
--- 11. ФОНОВЫЕ ЦИКЛЫ
--- ============================================================================
--- Авто-статы и покупка фруктов
-task.spawn(function()
-    while task.wait(4) do
-        if Env.OllieV3.Session ~= SessionId then break end
-        if Env.OllieV3.Enabled then
-            local comm = getCommF()
-            if comm then
-                if Env.OllieV3.AutoStats then
-                    pcall(function()
-                        local d = LocalPlayer:FindFirstChild("Data")
-                        local pts = d and d:FindFirstChild("Points")
-                        if pts and pts.Value > 0 then
-                            comm:InvokeServer("AddPoint", "Melee", 2)
-                            comm:InvokeServer("AddPoint", "Defense", 1)
-                        end
-                    end)
-                end
-                if Env.OllieV3.AutoRollFruit then
-                    pcall(function()
-                        comm:InvokeServer("Cousin", "Buy")
-                    end)
-                end
-            end
-        end
-    end
-end)
-
-local LastTravelTry = 0
-local WarnedWrongSea = false
-
-local function mainStep()
-    if IsSea2 or IsSea3 then
-        if not WarnedWrongSea then
-            WarnedWrongSea = true
-            log("ВНИМАНИЕ: база квестов в скрипте только для Первого моря (PlaceId " .. tostring(PlaceId) .. ")")
-        end
-        setStatus("Скрипт рассчитан только на Первое море")
-        return
-    end
-
-    if not selectPiratesTeam() then return end
-
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not char or not root or not hum or hum.Health <= 0 then
-        setStatus("Ожидание спавна персонажа...")
-        return
-    end
-
-    -- Уклонение от игроков (хоп запускается в отдельном потоке)
-    if Env.OllieV3.PlayerEvasion then
-        local allPlrs = Players:GetPlayers()
-        for i = 1, #allPlrs do
-            local p = allPlrs[i]
-            if p ~= LocalPlayer and p.Character then
-                local pr = p.Character:FindFirstChild("HumanoidRootPart")
-                if pr and (root.Position - pr.Position).Magnitude < Env.OllieV3.SafePlayerDist then
-                    setStatus("Игрок рядом! Меняем сервер...")
-                    if not Hop.Busy and os.clock() >= Hop.NextAllowed then
-                        log("Игрок " .. p.Name .. " рядом — запускаю Server Hop")
-                        task.spawn(runServerHop)
-                    end
-                    return
-                end
-            end
-        end
-    end
-
-    local q, myLvl = getQuestForLevel()
-
-    -- Переход во Второе море (не чаще раза в 15 сек)
-    if IsSea1 and myLvl >= 700 and os.clock() - LastTravelTry > 15 then
-        LastTravelTry = os.clock()
-        local comm = getCommF()
-        if comm then
-            log("Уровень 700+: пробую TravelDressrosa...")
-            local ok, err = pcall(function()
-                comm:InvokeServer("TravelDressrosa")
-            end)
-            if not ok then
-                log("Ошибка TravelDressrosa: " .. tostring(err))
-            end
-        end
-    end
-
-    if not ensureQuest(q, myLvl) then
-        if stillRunning() then
-            setStatus("Квест не взят, повтор...", myLvl, q.QName)
-            task.wait(2)
-        end
-        return
-    end
-
-    farmStep(q, myLvl, root)
-end
-
--- Основной цикл
-task.spawn(function()
-    waitForCommF()
-    log("Основной цикл запущен")
-
-    local lastErr = ""
-    local lastErrTime = 0
-
-    while Env.OllieV3.Session == SessionId do
-        task.wait(Env.OllieV3.AttackDelay)
-        if not Env.OllieV3.Enabled then
-            DesiredCFrame = nil
-            LandingMode = false
-        else
-            local ok, err = pcall(mainStep)
-            if not ok then
-                local e = tostring(err)
-                if e ~= lastErr or os.clock() - lastErrTime > 5 then
-                    log("Ошибка в основном цикле: " .. e)
-                    lastErr = e
-                    lastErrTime = os.clock()
-                end
-            end
-        end
-    end
-end)
-
-log("Скрипт загружен. Sea1=" .. tostring(IsSea1) .. " Sea2=" .. tostring(IsSea2) .. " Sea3=" .. tostring(IsSea3))
+        local model = res.Instance:FindFirstAncestorOfClass("Model
