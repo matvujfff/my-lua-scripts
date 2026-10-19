@@ -1,4 +1,4 @@
--- [[ BLOX FRUITS AUTO-FARM V3.1 - PATCHED, NOT LIVE-TESTED ]] --
+-- [[ BLOX FRUITS AUTO-FARM V3.2 - QUEST/HOP DEBUGFIX, NOT LIVE-TESTED ]] --
 -- Luau. Исправлены обнаруженные логические ошибки; актуальность remotes/координат не подтверждена.
 
 local Players = game:GetService("Players")
@@ -49,7 +49,7 @@ Env.OllieV3 = {
 -- Код ниже исправляет известные локальные ошибки, но не подтверждает совместимость с текущей игрой.
 
 local function log(msg)
-    print("[OLLIE V3] " .. tostring(msg))
+    print("[OLLIE V3.2] " .. tostring(msg))
 end
 
 local function stillRunning()
@@ -58,7 +58,7 @@ end
 
 pcall(function()
     StarterGui:SetCore("SendNotification", {
-        Title = "OLLIE FARM V3.1",
+        Title = "OLLIE FARM V3.2",
         Text = "Инжект успешен! Запуск систем...",
         Duration = 6
     })
@@ -207,15 +207,12 @@ local function refillCandidates()
     return #fresh
 end
 
-local function runServerHop()
-    if Hop.Busy then
-        log("Server Hop уже выполняется")
-        return
-    end
-    Hop.Busy = true
+local function runServerHopBody()
     Hop.Failed = {}
+    Hop.LastTarget = nil
+    Hop.TeleportFailedFlag = false
     setStatus("Ищем свободный сервер...")
-    log("Server Hop: старт")
+    log("Server Hop: старт; текущий JobId=" .. tostring(game.JobId))
 
     local tries = 0
     local emptyRounds = 0
@@ -226,8 +223,10 @@ local function runServerHop()
             local n = refillCandidates()
             if n == 0 then
                 emptyRounds = emptyRounds + 1
-                log("Нет подходящих серверов (раунд " .. emptyRounds .. ")")
-                if emptyRounds >= 2 then break end
+                log("Список серверов пуст. Проверьте сообщения API/HTTP выше (раунд " .. emptyRounds .. ")")
+                if emptyRounds >= 2 then
+                    break
+                end
                 task.wait(2)
             else
                 id = table.remove(Hop.Candidates)
@@ -238,49 +237,72 @@ local function runServerHop()
             tries = tries + 1
             Hop.LastTarget = id
             Hop.TeleportFailedFlag = false
-            log("Сервер для хопа найден: " .. id .. " (попытка " .. tries .. "/" .. Env.OllieV3.HopMaxTries .. ")")
+            log("Целевой сервер: " .. id .. " (попытка " .. tries .. "/" .. Env.OllieV3.HopMaxTries .. ")")
             setStatus("Телепорт на сервер (" .. tries .. ")...")
 
-            local ok, err = pcall(function()
+            local callOk, callErr = pcall(function()
                 TeleportService:TeleportToPlaceInstance(game.PlaceId, id, LocalPlayer)
             end)
 
-            if not ok then
-                log("Ошибка TeleportToPlaceInstance: " .. tostring(err))
+            if not callOk then
+                log("TeleportToPlaceInstance вызвал ошибку: " .. tostring(callErr))
                 Hop.Failed[id] = true
             else
-                local waited = 0
-                while waited < 20 and not Hop.TeleportFailedFlag do
-                    task.wait(0.25)
-                    waited = waited + 0.25
+                -- При успешном переходе текущий скрипт выгрузится вместе с этим сервером.
+                -- Если игрок остался здесь, ждём ошибку телепорта или тайм-аут и пробуем следующий ID.
+                local deadline = os.clock() + 15
+                while os.clock() < deadline and not Hop.TeleportFailedFlag
+                    and Env.OllieV3.Session == SessionId do
+                    task.wait(0.2)
                 end
+
                 if Hop.TeleportFailedFlag then
-                    log("Телепорт отклонён (сервер полный/недоступен) — пробуем другой")
+                    log("Roblox отклонил телепорт; пробую следующий сервер")
                 else
-                    log("Нет ответа 20 сек — пробуем другой сервер")
+                    log("Через 15 секунд переход не начался. ID помечен неудачным: " .. id)
                     Hop.Failed[id] = true
                 end
             end
         end
     end
 
-    -- Резервный вариант
     if Env.OllieV3.Session == SessionId then
-        log("Резервный вызов TeleportService:Teleport(placeId)...")
-        setStatus("Резервный телепорт...")
-        local ok, err = pcall(function()
+        log("Пробую резервное подключение к другому публичному серверу этого PlaceId")
+        setStatus("Резервная смена сервера...")
+        local fallbackOk, fallbackErr = pcall(function()
             TeleportService:Teleport(game.PlaceId, LocalPlayer)
         end)
-        if not ok then
-            log("Ошибка резервного Teleport: " .. tostring(err))
+        if not fallbackOk then
+            log("Резервная телепортация не запустилась: " .. tostring(fallbackErr))
+            setStatus("Смена сервера не удалась; смотрите Output")
         else
-            task.wait(20)
+            task.wait(15)
+            log("Резервный вызов выполнен; если сервер не сменился, нужен текст ошибки TeleportInitFailed/Output")
+            setStatus("Смена не подтверждена; проверьте Output")
         end
     end
+end
 
+local function runServerHop()
+    if Hop.Busy then
+        log("Server Hop уже выполняется; повторный запуск пропущен")
+        setStatus("Смена сервера уже выполняется")
+        return
+    end
+
+    Hop.Busy = true
+    local ok, err = xpcall(runServerHopBody, function(e)
+        return tostring(e) .. "\n" .. (debug and debug.traceback and debug.traceback() or "traceback недоступен")
+    end)
+
+    -- Важно: даже при ошибке кнопка должна оставаться рабочей для следующей попытки.
     Hop.Busy = false
     Hop.NextAllowed = os.clock() + Env.OllieV3.HopCooldown
-    log("Server Hop: завершён без перехода")
+
+    if not ok then
+        log("КРИТИЧЕСКАЯ ошибка Server Hop: " .. tostring(err))
+        setStatus("Ошибка смены сервера; смотрите Output")
+    end
 end
 
 local function manualHop()
@@ -328,7 +350,7 @@ local function buildSafeHUD()
     title.Size = UDim2.new(1, -12, 0, 22)
     title.Position = UDim2.new(0, 6, 0, 4)
     title.BackgroundTransparency = 1
-    title.Text = "OLLIE BF FARM V3.1 [РАБОТАЕТ]"
+    title.Text = "OLLIE BF FARM V3.2 [РАБОТАЕТ]"
     title.TextColor3 = Color3.fromRGB(0, 255, 136)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 15
@@ -384,18 +406,18 @@ local function buildSafeHUD()
     StatusTextObj = statusLbl
     LevelTextObj = infoLbl
 
-    toggleBtn.MouseButton1Click:Connect(function()
+    toggleBtn.Activated:Connect(function()
         Env.OllieV3.Enabled = not Env.OllieV3.Enabled
         if Env.OllieV3.Enabled then
             toggleBtn.Text = "ФАРМ: ВКЛ"
             toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
-            title.Text = "OLLIE BF FARM V3.1 [РАБОТАЕТ]"
+            title.Text = "OLLIE BF FARM V3.2 [РАБОТАЕТ]"
             title.TextColor3 = Color3.fromRGB(0, 255, 136)
             frame.BorderColor3 = Color3.fromRGB(0, 255, 136)
         else
             toggleBtn.Text = "ФАРМ: ПАУЗА"
             toggleBtn.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
-            title.Text = "OLLIE BF FARM V3.1 [ПАУЗА]"
+            title.Text = "OLLIE BF FARM V3.2 [ПАУЗА]"
             title.TextColor3 = Color3.fromRGB(255, 80, 80)
             frame.BorderColor3 = Color3.fromRGB(255, 80, 80)
             statusLbl.Text = "Статус: На паузе"
@@ -403,7 +425,7 @@ local function buildSafeHUD()
     end)
 
     -- кнопка хопа работает независимо от паузы фарма
-    hopBtn.MouseButton1Click:Connect(function()
+    hopBtn.Activated:Connect(function()
         log("Нажата кнопка СМЕНА СЕРВЕРА")
         task.spawn(manualHop)
     end)
@@ -515,18 +537,27 @@ local QuestsSea1 = {
     {Min = 150, Max = 174, Mob = "Sky Bandit", QName = "SkyQuest", QNum = 1, QPos = CFrame.new(-4839, 717, -2619), MPos = CFrame.new(-4953, 295, -2899)},
     {Min = 175, Max = 189, Mob = "Dark Master", QName = "SkyQuest", QNum = 2, QPos = CFrame.new(-4839, 717, -2619), MPos = CFrame.new(-5259, 391, -2229)},
     {Min = 190, Max = 209, Mob = "Prisoner", QName = "PrisonerQuest", QNum = 1, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5098, 0, 474)},
-    {Min = 210, Max = 249, Mob = "Dangerous Prisoner", QName = "PrisonerQuest", QNum = 2, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5654, 15, 866)},
-    {Min = 250, Max = 299, Mob = "Toga Warrior", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580, 7, -2986), MPos = CFrame.new(-1820, 51, -2740)},
+    {Min = 210, Max = 224, Mob = "Dangerous Prisoner", QName = "PrisonerQuest", QNum = 2, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5654, 15, 866)},
+    -- Update 30 added Ruthless Prisoner (level requirement 225) and moved Warden's quest to level 230.
+    {Min = 225, Max = 229, Mob = "Ruthless Prisoner", QName = "PrisonerQuest", QNum = 3, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5654, 15, 866)},
+    {Min = 230, Max = 249, Mob = "Warden", QName = "ImpelQuest", QNum = 2, QPos = CFrame.new(5191, 3, 686), MPos = CFrame.new(5230, 4, 749)},
+    {Min = 250, Max = 274, Mob = "Toga Warrior", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580, 7, -2986), MPos = CFrame.new(-1820, 51, -2740)},
+    {Min = 275, Max = 299, Mob = "Gladiator", QName = "ColosseumQuest", QNum = 2, QPos = CFrame.new(-1580, 7, -2986), MPos = CFrame.new(-1327, 59, -3231)},
     {Min = 300, Max = 324, Mob = "Military Soldier", QName = "MagmaQuest", QNum = 1, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5411, 11, 8454)},
-    {Min = 325, Max = 374, Mob = "Military Spy", QName = "MagmaQuest", QNum = 2, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5802, 86, 8828)},
+    {Min = 325, Max = 349, Mob = "Military Spy", QName = "MagmaQuest", QNum = 2, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5802, 86, 8828)},
+    {Min = 350, Max = 374, Mob = "Magma General", QName = "MagmaQuest", QNum = 3, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5694, 18, 8735)},
     {Min = 375, Max = 399, Mob = "Fishman Warrior", QName = "FishmanQuest", QNum = 1, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(60878, 18, 1543)},
-    {Min = 400, Max = 449, Mob = "Fishman Commando", QName = "FishmanQuest", QNum = 2, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(61922, 18, 1493)},
+    {Min = 400, Max = 424, Mob = "Fishman Commando", QName = "FishmanQuest", QNum = 2, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(61922, 18, 1493)},
+    {Min = 425, Max = 449, Mob = "Fishman Lord", QName = "FishmanQuest", QNum = 3, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(61260, 31, 1193)},
     {Min = 450, Max = 474, Mob = "God's Guard", QName = "SkyExp1Quest", QNum = 1, QPos = CFrame.new(-4721, 843, -1949), MPos = CFrame.new(-4710, 845, -1927)},
-    {Min = 475, Max = 524, Mob = "Shanda", QName = "SkyExp1Quest", QNum = 2, QPos = CFrame.new(-7859, 5544, -381), MPos = CFrame.new(-7678, 5566, -497)},
+    {Min = 475, Max = 499, Mob = "Shanda", QName = "SkyExp1Quest", QNum = 2, QPos = CFrame.new(-7859, 5544, -381), MPos = CFrame.new(-7678, 5566, -497)},
+    {Min = 500, Max = 524, Mob = "Sky Warlord", QName = "SkyExp1Quest", QNum = 3, QPos = CFrame.new(-7859, 5544, -381), MPos = CFrame.new(-7927, 5551, -637)},
     {Min = 525, Max = 549, Mob = "Royal Squad", QName = "SkyExp2Quest", QNum = 1, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7624, 5658, -1467)},
-    {Min = 550, Max = 624, Mob = "Royal Soldier", QName = "SkyExp2Quest", QNum = 2, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7836, 5645, -1790)},
+    {Min = 550, Max = 574, Mob = "Royal Soldier", QName = "SkyExp2Quest", QNum = 2, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7836, 5645, -1790)},
+    {Min = 575, Max = 624, Mob = "Lightning God", QName = "SkyExp2Quest", QNum = 3, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7751, 5607, -2315)},
     {Min = 625, Max = 649, Mob = "Galley Pirate", QName = "FountainQuest", QNum = 1, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5551, 78, 3930)},
-    {Min = 650, Max = 3000, Mob = "Galley Captain", QName = "FountainQuest", QNum = 2, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5649, 38, 4936)}
+    {Min = 650, Max = 674, Mob = "Galley Captain", QName = "FountainQuest", QNum = 2, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5649, 38, 4936)},
+    {Min = 675, Max = 699, Mob = "Cyborg", QName = "FountainQuest", QNum = 3, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(6138, 10, 3939)}
 }
 
 local function getLevel()
@@ -534,6 +565,57 @@ local function getLevel()
     local l = d and d:FindFirstChild("Level")
     if l then return l.Value end
     return 1
+end
+
+-- Update 30 reworked First Sea. Prefer positions from the current in-game NPC guide,
+-- because hard-coded pre-update coordinates can land beside a moved quest giver.
+local function resolveQuestPosition(q)
+    local guide = ReplicatedStorage:FindFirstChild("GuideModule")
+    if guide then
+        local ok, npcList = pcall(function()
+            return require(guide).Data.NPCList
+        end)
+        if ok and type(npcList) == "table" then
+            for _, entry in pairs(npcList) do
+                if type(entry) == "table" then
+                    for _, value in pairs(entry) do
+                        if value == q.QName then
+                            local pos = entry.Position
+                            if typeof(pos) == "CFrame" then return pos end
+                            if typeof(pos) == "Vector3" then return CFrame.new(pos) end
+                        end
+                    end
+                end
+            end
+        else
+            log("GuideModule.NPCList недоступен; использую запасные координаты квеста")
+        end
+    else
+        log("GuideModule не найден; использую запасные координаты квеста")
+    end
+    return q.QPos
+end
+
+local MobSpawnAliases = {
+    ["Magma General"] = {"Magma General", "Magma Admiral"},
+    ["Sky Warlord"] = {"Sky Warlord", "Wysper"},
+    ["Lightning God"] = {"Lightning God", "Thunder God"}
+}
+
+local function resolveMobPosition(q)
+    local folder = ReplicatedStorage:FindFirstChild("FortBuilderReplicatedSpawnPositionsFolder")
+    if folder then
+        local candidates = MobSpawnAliases[q.Mob] or {q.Mob}
+        for i = 1, #candidates do
+            local instance = folder:FindFirstChild(candidates[i])
+            if instance then
+                if instance:IsA("BasePart") then return instance.CFrame end
+                if instance:IsA("Model") then return instance:GetPivot() end
+                if instance:IsA("Attachment") then return instance.WorldCFrame end
+            end
+        end
+    end
+    return q.MPos
 end
 
 local function getQuestForLevel()
@@ -549,166 +631,4 @@ end
 
 local function getQuestFrame()
     local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-    local main = pGui and pGui:FindFirstChild("Main")
-    return main and main:FindFirstChild("Quest")
-end
-
-local function isQuestVisible()
-    local f = getQuestFrame()
-    return f ~= nil and f.Visible == true
-end
-
-local function getQuestTitle()
-    local f = getQuestFrame()
-    local cont = f and f:FindFirstChild("Container")
-    local qt = cont and cont:FindFirstChild("QuestTitle")
-    local lbl = qt and qt:FindFirstChild("Title")
-    if lbl and lbl:IsA("TextLabel") then
-        return lbl.Text
-    end
-    return nil
-end
-
-local function abandonQuest()
-    local comm = getCommF()
-    if comm then
-        local ok, err = pcall(function()
-            comm:InvokeServer("AbandonQuest")
-        end)
-        if not ok then
-            log("Ошибка AbandonQuest: " .. tostring(err))
-        end
-    end
-end
-
--- ============================================================================
--- 7. ДВИЖЕНИЕ (HEARTBEAT) + NOCLIP + ПОСАДКА НА ЗЕМЛЮ
--- ============================================================================
-local DesiredCFrame = nil
-local LandingMode = false -- true: вернуть коллизии возле точки посадки
-
--- Запоминаем исходное CanCollide для каждой детали. Раньше скрипт только выключал
--- коллизии и никогда не включал их обратно, из-за чего персонаж мог проваливаться.
-local OriginalCollisions = setmetatable({}, { __mode = "k" })
-local function setCharacterCollisionEnabled(enabled)
-    local char = LocalPlayer.Character
-    if not char then return end
-    local parts = char:GetDescendants()
-    for i = 1, #parts do
-        local part = parts[i]
-        if part:IsA("BasePart") then
-            if enabled then
-                local original = OriginalCollisions[part]
-                if original ~= nil then
-                    pcall(function() part.CanCollide = original end)
-                    OriginalCollisions[part] = nil
-                end
-            else
-                if OriginalCollisions[part] == nil then
-                    OriginalCollisions[part] = part.CanCollide
-                end
-                if part.CanCollide then
-                    pcall(function() part.CanCollide = false end)
-                end
-            end
-        end
-    end
-end
-
-local hbConn
-hbConn = RunService.Heartbeat:Connect(function(dt)
-    if Env.OllieV3.Session ~= SessionId then
-        setCharacterCollisionEnabled(true)
-        if hbConn then hbConn:Disconnect() end
-        return
-    end
-    if not Env.OllieV3.Enabled then
-        setCharacterCollisionEnabled(true)
-        return
-    end
-
-    local char = LocalPlayer.Character
-    if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not root or not hum or hum.Health <= 0 then
-        setCharacterCollisionEnabled(true)
-        return
-    end
-
-    pcall(function()
-        root.AssemblyLinearVelocity = ZeroVec
-        root.AssemblyAngularVelocity = ZeroVec
-    end)
-
-    local nearTarget = false
-    if DesiredCFrame then
-        nearTarget = (root.Position - DesiredCFrame.Position).Magnitude < 12
-    end
-
-    -- Noclip only during travel; restore original collisions when landing, pausing,
-    -- dying, or stopping this script.
-    setCharacterCollisionEnabled(LandingMode and nearTarget)
-
-    if DesiredCFrame then
-        local curPos = root.Position
-        local delta = DesiredCFrame.Position - curPos
-        local dist = delta.Magnitude
-        local step = Env.OllieV3.TweenSpeed * dt
-        if dist <= step + 0.5 then
-            root.CFrame = DesiredCFrame
-        else
-            local nextPos = curPos + (delta.Unit * step)
-            root.CFrame = CFrame.new(nextPos, nextPos + root.CFrame.LookVector)
-        end
-    end
-end)
-
-local function waitUntilNear(targetPos, tolerance, timeout)
-    local t0 = os.clock()
-    while os.clock() - t0 < timeout do
-        if not stillRunning() then return false end
-        local root = getRoot()
-        if root and (root.Position - targetPos).Magnitude <= tolerance then
-            return true
-        end
-        task.wait(0.1)
-    end
-    return false
-end
-
--- Точка на земле под/рядом с NPC (рейкаст вниз, чтобы не парить)
-local function getGroundCFrame(npcCFrame)
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-
-    local offset = 3
-    if hum and root then
-        offset = math.max(3, hum.HipHeight + root.Size.Y / 2 + 0.3)
-    end
-
-    local filter = {}
-    if char then filter[#filter + 1] = char end
-    local enemies = Workspace:FindFirstChild("Enemies")
-    if enemies then filter[#filter + 1] = enemies end
-
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = filter
-    local okEx = pcall(function()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-    end)
-    if not okEx then
-        pcall(function()
-            params.FilterType = Enum.RaycastFilterType.Blacklist
-        end)
-    end
-
-    local origin = npcCFrame.Position + Vector3.new(0, 8, 0)
-    local ground = nil
-    for i = 1, 4 do
-        local ok, res = pcall(function()
-            return Workspace:Raycast(origin, Vector3.new(0, -60, 0), params)
-        end)
-        if not ok or not res then break end
-        local model = res.Instance:FindFirstAncestorOfClass("Model
+    local main = pGui
