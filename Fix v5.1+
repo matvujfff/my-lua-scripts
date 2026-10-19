@@ -1,0 +1,571 @@
+-- [[ OLLIE BLOX FRUITS AUTO-FARM V4 - QUEST & SERVERHOP FIXED ]] --
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.2)
+    LocalPlayer = Players.LocalPlayer
+end
+
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "OLLIE FARM V4",
+        Text = "Запуск V4 (Фикс квестов и хопа)",
+        Duration = 5
+    })
+end)
+
+local Env = (getgenv and getgenv()) or _G
+Env.OllieV4 = {
+    Enabled = true,
+    AutoStats = true,
+    AutoRollFruit = true,
+    BringMobs = true,
+    TweenSpeed = 250,
+    HoverHeight = 12,
+    AttackDelay = 0.15,
+    WeaponType = "Melee"
+}
+
+-- ============================================================================
+-- 1. НАДЕЖНЫЙ HUD В PLAYERGUI
+-- ============================================================================
+local StatusTextObj = nil
+local LevelTextObj = nil
+
+local function createHUD()
+    local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not pGui then return nil end
+
+    local old = pGui:FindFirstChild("OllieHudV4")
+    if old then old:Destroy() end
+
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "OllieHudV4"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 999999
+    screen.Parent = pGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 280, 0, 115)
+    frame.Position = UDim2.new(0, 12, 0, 38)
+    frame.BackgroundColor3 = Color3.fromRGB(16, 18, 24)
+    frame.BorderSizePixel = 2
+    frame.BorderColor3 = Color3.fromRGB(0, 255, 136)
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = screen
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -12, 0, 22)
+    title.Position = UDim2.new(0, 6, 0, 4)
+    title.BackgroundTransparency = 1
+    title.Text = "OLLIE BF FARM V4 [АКТИВЕН]"
+    title.TextColor3 = Color3.fromRGB(0, 255, 136)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 15
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    frame.Parent = screen
+    title.Parent = frame
+
+    local statusLbl = Instance.new("TextLabel")
+    statusLbl.Size = UDim2.new(1, -12, 0, 34)
+    statusLbl.Position = UDim2.new(0, 6, 0, 26)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text = "Статус: Запуск..."
+    statusLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+    statusLbl.Font = Enum.Font.SourceSans
+    statusLbl.TextSize = 14
+    statusLbl.TextWrapped = true
+    statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+    statusLbl.TextYAlignment = Enum.TextYAlignment.Top
+    statusLbl.Parent = frame
+
+    local infoLbl = Instance.new("TextLabel")
+    infoLbl.Size = UDim2.new(1, -12, 0, 18)
+    infoLbl.Position = UDim2.new(0, 6, 0, 60)
+    infoLbl.BackgroundTransparency = 1
+    infoLbl.Text = "LVL: -- | Квест: --"
+    infoLbl.TextColor3 = Color3.fromRGB(180, 185, 200)
+    infoLbl.Font = Enum.Font.SourceSans
+    infoLbl.TextSize = 13
+    infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+    infoLbl.Parent = frame
+
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Size = UDim2.new(0, 125, 0, 26)
+    toggleBtn.Position = UDim2.new(0, 8, 0, 82)
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+    toggleBtn.BorderSizePixel = 0
+    toggleBtn.Text = "ФАРМ: ВКЛ"
+    toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    toggleBtn.Font = Enum.Font.SourceSansBold
+    toggleBtn.TextSize = 14
+    toggleBtn.Parent = frame
+
+    local hopBtn = Instance.new("TextButton")
+    hopBtn.Size = UDim2.new(0, 125, 0, 26)
+    hopBtn.Position = UDim2.new(0, 145, 0, 82)
+    hopBtn.BackgroundColor3 = Color3.fromRGB(40, 95, 200)
+    hopBtn.BorderSizePixel = 0
+    hopBtn.Text = "СМЕНА СЕРВЕРА"
+    hopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    hopBtn.Font = Enum.Font.SourceSansBold
+    hopBtn.TextSize = 14
+    hopBtn.Parent = frame
+
+    StatusTextObj = statusLbl
+    LevelTextObj = infoLbl
+
+    toggleBtn.MouseButton1Click:Connect(function()
+        Env.OllieV4.Enabled = not Env.OllieV4.Enabled
+        if Env.OllieV4.Enabled then
+            toggleBtn.Text = "ФАРМ: ВКЛ"
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+            title.Text = "OLLIE BF FARM V4 [АКТИВЕН]"
+            title.TextColor3 = Color3.fromRGB(0, 255, 136)
+            frame.BorderColor3 = Color3.fromRGB(0, 255, 136)
+        else
+            toggleBtn.Text = "ФАРМ: ПАУЗА"
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+            title.Text = "OLLIE BF FARM V4 [ПАУЗА]"
+            title.TextColor3 = Color3.fromRGB(255, 80, 80)
+            frame.BorderColor3 = Color3.fromRGB(255, 80, 80)
+            statusLbl.Text = "Статус: На паузе"
+        end
+    end)
+
+    return hopBtn
+end
+
+local function setStatus(msg, lvl, qName)
+    pcall(function()
+        if StatusTextObj then
+            StatusTextObj.Text = "Статус: " .. tostring(msg)
+        end
+        if LevelTextObj and (lvl or qName) then
+            LevelTextObj.Text = "LVL: " .. tostring(lvl or "--") .. " | Квест: " .. tostring(qName or "--")
+        end
+    end)
+end
+
+local HopBtn = createHUD()
+
+-- ============================================================================
+-- 2. ПРОБИВНОЙ SERVER HOP (ТРОЙНОЙ МЕТОД: __ServerBrowser -> API -> Прямой Teleport)
+-- ============================================================================
+local HopLock = false
+local function forceServerHop()
+    if HopLock then return end
+    HopLock = true
+    setStatus("Переход на другой сервер...")
+
+    local placeId = game.PlaceId
+    local currentJob = game.JobId
+
+    -- Метод 1: Встроенный браузер серверов Blox Fruits
+    pcall(function()
+        local sb = ReplicatedStorage:FindFirstChild("__ServerBrowser")
+        if sb then
+            for page = 1, 3 do
+                local list = sb:InvokeServer(page)
+                if type(list) == "table" then
+                    for jobId, info in pairs(list) do
+                        if jobId ~= currentJob and type(info) == "table" and info.Count and info.Count >= 2 and info.Count <= 9 then
+                            setStatus("Телепорт через ServerBrowser...")
+                            sb:InvokeServer("teleport", jobId)
+                            task.wait(3)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- Метод 2: Публичный API с сортировкой Desc (живые серверы, а не пустые)
+    pcall(function()
+        local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Desc&limit=100"
+        local raw = game:HttpGet(url)
+        local data = HttpService:JSONDecode(raw)
+        if data and data.data then
+            for i = 1, #data.data do
+                local srv = data.data[i]
+                if type(srv) == "table" and srv.id ~= currentJob and srv.playing and srv.playing >= 3 and srv.playing <= 9 then
+                    setStatus("Телепорт по JobId...")
+                    TeleportService:TeleportToPlaceInstance(placeId, srv.id, LocalPlayer)
+                    task.wait(3)
+                end
+            end
+        end
+    end)
+
+    -- Метод 3: Безотказный стандартный реконнект Roblox на новый сервер
+    setStatus("Прямой перезаход на новый сервер...")
+    pcall(function()
+        TeleportService:Teleport(placeId, LocalPlayer)
+    end)
+
+    task.wait(5)
+    HopLock = false
+end
+
+if HopBtn then
+    HopBtn.MouseButton1Click:Connect(function()
+        task.spawn(forceServerHop)
+    end)
+end
+
+-- Anti-AFK
+LocalPlayer.Idled:Connect(function()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button2Down(Vector2.new(0, 0), Workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), Workspace.CurrentCamera.CFrame)
+    end)
+end)
+
+-- ============================================================================
+-- 3. РАБОТА С REMOTES И ПРОВЕРКОЙ ОКОН КВЕСТА (MOBILE + PC UI)
+-- ============================================================================
+local function getCommF()
+    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+    return rem and rem:FindFirstChild("CommF_")
+end
+
+local function ensurePirates()
+    if not LocalPlayer.Team or (LocalPlayer.Team.Name ~= "Pirates" and LocalPlayer.Team.Name ~= "Marines") then
+        setStatus("Выбираем команду Pirates...")
+        pcall(function()
+            local comm = getCommF()
+            if comm then
+                comm:InvokeServer("SetTeam", "Pirates")
+            end
+        end)
+        task.wait(1)
+        return false
+    end
+    return true
+end
+
+-- Универсальный поиск контейнера Quest (поддерживает и Main, и Main (minimal) на Android)
+local function getQuestGuiFrame()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return nil end
+
+    local main1 = pGui:FindFirstChild("Main")
+    if main1 and main1:FindFirstChild("Quest") then
+        return main1.Quest
+    end
+
+    local main2 = pGui:FindFirstChild("Main (minimal)")
+    if main2 and main2:FindFirstChild("Quest") then
+        return main2.Quest
+    end
+
+    -- Резервный глубокий поиск
+    for _, child in ipairs(pGui:GetChildren()) do
+        if child:IsA("ScreenGui") then
+            local q = child:FindFirstChild("Quest", true)
+            if q and q:IsA("GuiObject") and q:FindFirstChild("Container") then
+                return q
+            end
+        end
+    end
+    return nil
+end
+
+local LastQuestTakenTime = 0
+local LastQuestLevel = 0
+
+local function checkQuestActive(expectedMob, myLvl)
+    local qFrame = getQuestGuiFrame()
+    if qFrame then
+        if qFrame.Visible then
+            return true
+        else
+            return false
+        end
+    end
+    -- Если мобильный интерфейс скрыл Quest фрейм, опираемся на таймер после вызова StartQuest
+    if (tick() - LastQuestTakenTime < 90) and (LastQuestLevel == myLvl) then
+        return true
+    end
+    return false
+end
+
+-- ============================================================================
+-- 4. ТАБЛИЦА КВЕСТОВ SEA 1
+-- ============================================================================
+local QuestsSea1 = {
+    {Min = 1, Max = 9, Mob = "Bandit", QName = "BanditQuest1", QNum = 1, QPos = CFrame.new(1059, 16, 1549), MPos = CFrame.new(1145, 17, 1634)},
+    {Min = 10, Max = 14, Mob = "Monkey", QName = "JungleQuest", QNum = 1, QPos = CFrame.new(-1598, 36, 153), MPos = CFrame.new(-1448, 50, 63)},
+    {Min = 15, Max = 29, Mob = "Gorilla", QName = "JungleQuest", QNum = 2, QPos = CFrame.new(-1598, 36, 153), MPos = CFrame.new(-1129, 40, -525)},
+    {Min = 30, Max = 39, Mob = "Pirate", QName = "BuggyQuest1", QNum = 1, QPos = CFrame.new(-1140, 4, 3829), MPos = CFrame.new(-1201, 4, 3916)},
+    {Min = 40, Max = 59, Mob = "Brute", QName = "BuggyQuest1", QNum = 2, QPos = CFrame.new(-1140, 4, 3829), MPos = CFrame.new(-1145, 15, 4350)},
+    {Min = 60, Max = 74, Mob = "Desert Bandit", QName = "DesertQuest", QNum = 1, QPos = CFrame.new(894, 6, 4390), MPos = CFrame.new(924, 6, 4481)},
+    {Min = 75, Max = 89, Mob = "Desert Officer", QName = "DesertQuest", QNum = 2, QPos = CFrame.new(894, 6, 4390), MPos = CFrame.new(1608, 9, 4371)},
+    {Min = 90, Max = 99, Mob = "Snow Bandit", QName = "SnowQuest", QNum = 1, QPos = CFrame.new(1389, 87, -1298), MPos = CFrame.new(1354, 87, -1393)},
+    {Min = 100, Max = 119, Mob = "Snowman", QName = "SnowQuest", QNum = 2, QPos = CFrame.new(1389, 87, -1298), MPos = CFrame.new(1201, 144, -1550)},
+    {Min = 120, Max = 149, Mob = "Chief Petty Officer", QName = "MarineQuest2", QNum = 1, QPos = CFrame.new(-5039, 28, 4324), MPos = CFrame.new(-4881, 22, 4273)},
+    {Min = 150, Max = 174, Mob = "Sky Bandit", QName = "SkyQuest", QNum = 1, QPos = CFrame.new(-4839, 717, -2619), MPos = CFrame.new(-4953, 295, -2899)},
+    {Min = 175, Max = 189, Mob = "Dark Master", QName = "SkyQuest", QNum = 2, QPos = CFrame.new(-4839, 717, -2619), MPos = CFrame.new(-5259, 391, -2229)},
+    {Min = 190, Max = 209, Mob = "Prisoner", QName = "PrisonerQuest", QNum = 1, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5098, 0, 474)},
+    {Min = 210, Max = 249, Mob = "Dangerous Prisoner", QName = "PrisonerQuest", QNum = 2, QPos = CFrame.new(5308, 2, 475), MPos = CFrame.new(5654, 15, 866)},
+    {Min = 250, Max = 299, Mob = "Toga Warrior", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580, 7, -2986), MPos = CFrame.new(-1820, 51, -2740)},
+    {Min = 300, Max = 324, Mob = "Military Soldier", QName = "MagmaQuest", QNum = 1, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5411, 11, 8454)},
+    {Min = 325, Max = 374, Mob = "Military Spy", QName = "MagmaQuest", QNum = 2, QPos = CFrame.new(-5313, 12, 8515), MPos = CFrame.new(-5802, 86, 8828)},
+    {Min = 375, Max = 399, Mob = "Fishman Warrior", QName = "FishmanQuest", QNum = 1, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(60878, 18, 1543)},
+    {Min = 400, Max = 449, Mob = "Fishman Commando", QName = "FishmanQuest", QNum = 2, QPos = CFrame.new(61122, 18, 1569), MPos = CFrame.new(61922, 18, 1493)},
+    {Min = 450, Max = 474, Mob = "God's Guard", QName = "SkyExp1Quest", QNum = 1, QPos = CFrame.new(-4721, 843, -1949), MPos = CFrame.new(-4710, 845, -1927)},
+    {Min = 475, Max = 524, Mob = "Shanda", QName = "SkyExp1Quest", QNum = 2, QPos = CFrame.new(-7859, 5544, -381), MPos = CFrame.new(-7678, 5566, -497)},
+    {Min = 525, Max = 549, Mob = "Royal Squad", QName = "SkyExp2Quest", QNum = 1, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7624, 5658, -1467)},
+    {Min = 550, Max = 624, Mob = "Royal Soldier", QName = "SkyExp2Quest", QNum = 2, QPos = CFrame.new(-7906, 5634, -1411), MPos = CFrame.new(-7836, 5645, -1790)},
+    {Min = 625, Max = 649, Mob = "Galley Pirate", QName = "FountainQuest", QNum = 1, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5551, 78, 3930)},
+    {Min = 650, Max = 3000, Mob = "Galley Captain", QName = "FountainQuest", QNum = 2, QPos = CFrame.new(5259, 38, 4050), MPos = CFrame.new(5649, 38, 4936)}
+}
+
+local function getLevelAndQuest()
+    local d = LocalPlayer:FindFirstChild("Data")
+    local l = d and d:FindFirstChild("Level")
+    local lvl = (l and l.Value) or 1
+    for i = 1, #QuestsSea1 do
+        local q = QuestsSea1[i]
+        if lvl >= q.Min and lvl <= q.Max then
+            return q, lvl
+        end
+    end
+    return QuestsSea1[#QuestsSea1], lvl
+end
+
+-- ============================================================================
+-- 5. ПЛАВНЫЙ ПОЛЕТ И УДЕРЖАНИЕ ПОЗИЦИИ
+-- ============================================================================
+local TargetPosCFrame = nil
+local ZeroVector = Vector3.new(0, 0, 0)
+
+RunService.Heartbeat:Connect(function(dt)
+    if not Env.OllieV4.Enabled then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
+
+    pcall(function()
+        root.Velocity = ZeroVector
+        root.RotVelocity = ZeroVector
+    end)
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
+        end
+    end
+
+    if TargetPosCFrame then
+        local cur = root.Position
+        local dst = TargetPosCFrame.Position
+        local diff = dst - cur
+        local dist = diff.Magnitude
+
+        if dist <= 4 then
+            root.CFrame = TargetPosCFrame
+        else
+            local step = math.min(dist, Env.OllieV4.TweenSpeed * dt)
+            root.CFrame = CFrame.new(cur + (diff.Unit * step))
+        end
+    end
+end)
+
+-- ============================================================================
+-- 6. ПОИСК МОБОВ (ПО ЧАСТИ ИМЕНИ) И БОЕВАЯ СИСТЕМА
+-- ============================================================================
+local function findAliveMob(mobSubstring)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+    local lowerSub = string.lower(mobSubstring)
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if string.find(string.lower(m.Name), lowerSub, 1, true) then
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            if mh and mr and mh.Health > 0 then
+                return m
+            end
+        end
+    end
+    return nil
+end
+
+local function equipMelee()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum then return nil end
+
+    local eq = char:FindFirstChildOfClass("Tool")
+    if eq and (eq.ToolTip == Env.OllieV4.WeaponType or eq.Name == "Combat") then
+        return eq
+    end
+
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, it in ipairs(bp:GetChildren()) do
+            if it:IsA("Tool") and (it.ToolTip == Env.OllieV4.WeaponType or it.Name == "Combat") then
+                hum:EquipTool(it)
+                return it
+            end
+        end
+        local anyTool = bp:FindFirstChildOfClass("Tool")
+        if anyTool then
+            hum:EquipTool(anyTool)
+            return anyTool
+        end
+    end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+local function bringMobs(mobSubstring, pos)
+    if not Env.OllieV4.BringMobs then return end
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    local lowerSub = string.lower(mobSubstring)
+
+    pcall(function()
+        if sethiddenproperty then
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        end
+    end)
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if string.find(string.lower(m.Name), lowerSub, 1, true) then
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            if mr and mh and mh.Health > 0 and (mr.Position - pos).Magnitude <= 250 then
+                pcall(function()
+                    mr.CanCollide = false
+                    mr.Velocity = ZeroVector
+                    mr.CFrame = CFrame.new(pos)
+                end)
+            end
+        end
+    end
+end
+
+local function hitTarget(mob)
+    local tool = equipMelee()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    pcall(function()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        if net and mob and mob:FindFirstChild("HumanoidRootPart") then
+            local regAtk = net:FindFirstChild("RE/RegisterAttack")
+            local regHit = net:FindFirstChild("RE/RegisterHit")
+            if regAtk and regHit then
+                regAtk:FireServer(0)
+                regHit:FireServer(mob.HumanoidRootPart, {{mob, mob.HumanoidRootPart}})
+            end
+        end
+    end)
+
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton1(Vector2.new(400, 225))
+    end)
+end
+
+-- ============================================================================
+-- 7. АВТО-СТАТЫ И ФРУКТЫ
+-- ============================================================================
+task.spawn(function()
+    while task.wait(4) do
+        if Env.OllieV4.Enabled then
+            local comm = getCommF()
+            if comm then
+                if Env.OllieV4.AutoStats then
+                    pcall(function()
+                        local pts = LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Points")
+                        if pts and pts.Value > 0 then
+                            comm:InvokeServer("AddPoint", "Melee", 2)
+                            comm:InvokeServer("AddPoint", "Defense", 1)
+                        end
+                    end)
+                end
+                if Env.OllieV4.AutoRollFruit then
+                    pcall(function() comm:InvokeServer("Cousin", "Buy") end)
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================================
+-- 8. ГЛАВНЫЙ ЦИКЛ ФАРМА
+-- ============================================================================
+task.spawn(function()
+    while task.wait(Env.OllieV4.AttackDelay) do
+        if not Env.OllieV4.Enabled then
+            TargetPosCFrame = nil
+        else
+            pcall(function()
+                if ensurePirates() then
+                    local char = LocalPlayer.Character
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+                    if not char or not root or not hum or hum.Health <= 0 then
+                        setStatus("Ожидание спавна...")
+                    else
+                        local qData, myLvl = getLevelAndQuest()
+
+                        if not checkQuestActive(qData.Mob, myLvl) then
+                            local distToNpc = (root.Position - qData.QPos.Position).Magnitude
+                            setStatus("Летим к NPC (" .. tostring(math.floor(distToNpc)) .. "м)", myLvl, qData.QName)
+                            TargetPosCFrame = qData.QPos
+
+                            -- Когда подлетели вплотную (менее 6 стадов), вызываем StartQuest и фиксируем таймер
+                            if distToNpc <= 6 then
+                                local comm = getCommF()
+                                if comm then
+                                    setStatus("Берем квест " .. qData.QName .. "...", myLvl, qData.QName)
+                                    comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
+                                    LastQuestTakenTime = tick()
+                                    LastQuestLevel = myLvl
+                                    task.wait(0.6)
+                                end
+                            end
+                        else
+                            local mob = findAliveMob(qData.Mob)
+                            if mob then
+                                local mPos = mob.HumanoidRootPart.Position
+                                local distToMob = (root.Position - mPos).Magnitude
+                                setStatus("Атакуем: " .. mob.Name .. " [HP: " .. tostring(math.floor(mob.Humanoid.Health)) .. "]", myLvl, qData.QName)
+                                TargetPosCFrame = CFrame.new(mPos + Vector3.new(0, Env.OllieV4.HoverHeight, 0))
+
+                                if distToMob <= 35 then
+                                    bringMobs(qData.Mob, mPos)
+                                    hitTarget(mob)
+                                end
+                            else
+                                local distToSpawn = (root.Position - qData.MPos.Position).Magnitude
+                                setStatus("Летим к точке мобов (" .. tostring(math.floor(distToSpawn)) .. "м)", myLvl, qData.QName)
+                                TargetPosCFrame = qData.MPos * CFrame.new(0, 15, 0)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
