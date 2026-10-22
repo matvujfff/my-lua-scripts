@@ -1,0 +1,206 @@
+-- Language: Lua (Luau) | File: farm_patched.lua | Runtime: Project Real / Windows & Android Executors
+-- Чистый Luau без крашащих функций (без getsenv/getupvalues) и без зависаний на старте.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local VirtualUser = game:GetService("VirtualUser")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- Мгновенное уведомление на экран, что скрипт запустился
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "[OLLIE BENCH]",
+        Text = "Immortal Patch + FastAttack запущены!",
+        Duration = 5
+    })
+end)
+
+-- === НАСТРОЙКИ ПАТЧА ===
+local Config = {
+    Enabled = true,
+    OverheadOffset = 18,      -- Высота зависания над мобом (в стадах), чтобы мобы не доставали
+    SafeHpPercent = 0.38,     -- При 38% HP принудительно уводит персонажа вверх из боя
+    ResumeHpPercent = 0.85,   -- Возвращает в бой только при 85% HP
+    SafeSkyHeight = 300,      -- Высота отхила (на 300 стадов выше боя)
+    HitboxSize = 55,          -- Расширение хитбокса мобов (чтобы твои удары доставали сверху)
+    FastAttackDelay = 0.07,   -- Скорость ударов (меньше = быстрее)
+    AutoStats = true          -- Авто-прокачка Defense + Melee (чтобы мобы не шотали)
+}
+
+-- === 1. ЗАЩИТА ОТ ПАДЕНИЯ И ЗАСТРЕВАНИЯ (NOCLIP + HOVER) ===
+local isHealing = false
+local safePosition = nil
+
+RunService.Stepped:Connect(function()
+    if not Config.Enabled then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then
+        isHealing = false
+        safePosition = nil
+        return
+    end
+
+    -- Выключаем коллизию, чтобы персонажа не стопорило об стены и мобов
+    for _, v in ipairs(char:GetDescendants()) do
+        if v:IsA("BasePart") and v.CanCollide then
+            v.CanCollide = false
+        end
+    end
+
+    -- Контроль ХП: если пробили ниже 38% — перехватываем управление у основного скрипта и уводим в небо
+    local hpRatio = hum.Health / hum.MaxHealth
+    if hpRatio < Config.SafeHpPercent and not isHealing then
+        isHealing = true
+        safePosition = root.Position + Vector3.new(0, Config.SafeSkyHeight, 0)
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "[SAFE MODE]",
+                Text = "Лоу ХП! Отлетаем на отхил...",
+                Duration = 3
+            })
+        end)
+    elseif isHealing and hpRatio >= Config.RecoveredHpPercent then
+        isHealing = false
+        safePosition = nil
+    end
+end)
+
+-- Перехват позиции на каждом кадре (RenderStepped перебивает твины твоего скрипта, когда нужен сейв)
+RunService.RenderStepped:Connect(function()
+    if not Config.Enabled then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
+
+    local hpRatio = hum.Health / hum.MaxHealth
+    if hpRatio >= Config.ResumeHpPercent then
+        isHealing = false
+    end
+
+    if isHealing and safePosition then
+        -- Жестко держим в небе и гасим инерцию, пока ХП не восстановится
+        root.Velocity = Vector3.zero
+        root.CFrame = CFrame.new(safePosition)
+        return
+    end
+
+    -- Если мы в бою рядом с мобом — поднимаем персонажа в слепую зону над головой моба
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, mob in ipairs(enemies:GetChildren()) do
+            local mRoot = mob:FindFirstChild("HumanoidRootPart")
+            local mHum = mob:FindFirstChildOfClass("Humanoid")
+            if mRoot and mHum and mHum.Health > 0 then
+                local dist = (mRoot.Position - root.Position).Magnitude
+                -- Если наш скрипт подлетел к мобу ближе чем на 35 стадов — поднимаем над ним
+                if dist < 35 then
+                    local highPos = Vector3.new(mRoot.Position.X, mRoot.Position.Y + Config.OverheadOffset, mRoot.Position.Z)
+                    root.Velocity = Vector3.zero
+                    -- Ставим над мобом и направляем удар вниз
+                    root.CFrame = CFrame.new(highPos, mRoot.Position)
+                    break
+                end
+            end
+        end
+    end
+end)
+
+-- === 2. ОГРОМНЫЕ ХИТБОКСЫ И ОТКЛЮЧЕНИЕ АТАК МОБАМ ===
+task.spawn(function()
+    while task.wait(0.3) do
+        if Config.Enabled then
+            local enemies = Workspace:FindFirstChild("Enemies")
+            if enemies then
+                for _, mob in ipairs(enemies:GetChildren()) do
+                    pcall(function()
+                        local mRoot = mob:FindFirstChild("HumanoidRootPart")
+                        local mHum = mob:FindFirstChildOfClass("Humanoid")
+                        if mRoot and mHum and mHum.Health > 0 then
+                            -- Раздуваем хитбокс моба, чтобы бить его с безопасной высоты
+                            mRoot.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
+                            mRoot.Transparency = 0.85
+                            mRoot.CanCollide = false
+                            -- Замораживаем моба на месте
+                            mHum.WalkSpeed = 0
+                            mHum.JumpPower = 0
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- === 3. УСИЛЕННЫЙ УРОН (FAST ATTACK + АВТО-ХАКИ) ===
+task.spawn(function()
+    while task.wait(Config.FastAttackDelay) do
+        if Config.Enabled and not isHealing then
+            pcall(function()
+                local char = LocalPlayer.Character
+                if not char then return end
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+
+                -- Авто-включение Buso Haki (дает броню и урон)
+                if not char:FindFirstChild("HasBuso") then
+                    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+                    local comm = rem and rem:FindFirstChild("CommF_")
+                    if comm then comm:InvokeServer("Buso") end
+                end
+
+                -- Проверяем, есть ли моб рядом, и спамим ударами
+                local enemies = Workspace:FindFirstChild("Enemies")
+                if enemies then
+                    for _, mob in ipairs(enemies:GetChildren()) do
+                        local mRoot = mob:FindFirstChild("HumanoidRootPart")
+                        local mHum = mob:FindFirstChildOfClass("Humanoid")
+                        if mRoot and mHum and mHum.Health > 0 and (mRoot.Position - root.Position).Magnitude <= 65 then
+                            -- Прямой сетевой удар (если доступен в плейсе)
+                            local netAttack = ReplicatedStorage:FindFirstChild("RegisterAttack", true)
+                            local netHit = ReplicatedStorage:FindFirstChild("RegisterHit", true)
+                            if netAttack and netHit then
+                                netAttack:FireServer(0)
+                                netHit:FireServer(mRoot, {{mob, mRoot}})
+                            end
+                            -- Быстрый клик оружием
+                            VirtualUser:CaptureController()
+                            VirtualUser:Button1Down(Vector2.new(640, 360))
+                            break
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- === 4. АВТО-СТАТЫ В ЗАЩИТУ И УРОН ===
+task.spawn(function()
+    while task.wait(3) do
+        if Config.Enabled and Config.AutoStats then
+            pcall(function()
+                local rem = ReplicatedStorage:FindFirstChild("Remotes")
+                local comm = rem and rem:FindFirstChild("CommF_")
+                local pts = LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Points")
+                if comm and pts and pts.Value > 0 then
+                    comm:InvokeServer("AddPoint", "Defense", math.ceil(pts.Value / 2))
+                    comm:InvokeServer("AddPoint", "Melee", math.floor(pts.Value / 2))
+                end
+            end)
+        end
+    end
+end)
+
+-- =========================================================================
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/matvujfff/my-lua-scripts/main/Gemini%205.2"))():
+-- =========================================================================
