@@ -1,0 +1,314 @@
+-- Language: Lua (Luau) | Module: immortal_farm_core.lua | Runtime: Executor Environment (Project Real / Delta)
+-- Назначение: Бессмертное позиционирование (Overhead Lock), авто-сейв по HP, стяжка мобов (BringMobs), Fast Attack без КД.
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- === КОНФИГУРАЦИЯ ===
+getgenv().FarmConfig = {
+    Enabled = true,
+    SafeHeight = 19,          -- Высота над мобом (18-22 стада — мертвая зона для ударов NPC)
+    EscapeHeight = 250,       -- Высота эвакуации при низком HP
+    LowHpThreshold = 0.35,    -- Порог ухода на отхил (35% HP)
+    RecoveredHpThreshold = 0.88, -- Порог возврата в бой (88% HP)
+    BringMobRadius = 280,     -- Радиус стяжки мобов в одну точку
+    HitboxSize = Vector3.new(60, 60, 60), -- Размер хитбокса мобов для гарантированного попадания сверху
+    WeaponType = "Melee",     -- "Melee", "Sword", "Fruit" (или точное имя оружия)
+    AutoBuso = true,          -- Авто-включение Хаки Вооружения (Buso)
+    AutoStats = true,         -- Авто-прокачка статов (фокус в защиту и атаку, чтобы не ваншотали)
+    CpuSaver = false          -- Поставь true на ферме из 10-50 окон (гасит 3D рендер и лочит 8 FPS)
+}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+local EnemiesFolder = Workspace:WaitForChild("Enemies", 15)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
+local CommF = Remotes and Remotes:WaitForChild("CommF_", 15)
+
+-- === 1. ОПТИМИЗАТОР РЕСУРСОВ (ОПЦИОНАЛЬНО) ===
+if getgenv().FarmConfig.CpuSaver then
+    pcall(function()
+        RunService:Set3dRenderingEnabled(false)
+        if setfpscap then setfpscap(8) end
+        settings().Rendering.QualityLevel = 1
+    end)
+end
+
+-- === 2. АНТИ-АФК ===
+LocalPlayer.Idled:Connect(function()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end)
+
+-- === 3. ПОЛУЧЕНИЕ АКТИВНЫХ КОМПОНЕНТОВ ПЕРСОНАЖА ===
+local function getCharacterParts()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil, nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return nil, nil, nil end
+    return char, root, hum
+end
+
+-- === 4. ЖЕСТКИЙ NOCLIP И АНТИ-ГРАВИТАЦИЯ (ЧТОБЫ НЕ ПАДАТЬ К МОБАМ) ===
+RunService.Stepped:Connect(function()
+    if not getgenv().FarmConfig.Enabled then return end
+    local char, root, hum = getCharacterParts()
+    if not char or not root or not hum then return end
+
+    -- Отключаем коллизии всех частей тела, чтобы не застревать в текстурах
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
+        end
+    end
+
+    -- Держим BodyVelocity в корне, чтобы гравитация и удары мобов не сбивали высоту
+    local bv = root:FindFirstChild("OllieHoverLock")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "OllieHoverLock"
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bv.Velocity = Vector3.zero
+        bv.Parent = root
+    else
+        bv.Velocity = Vector3.zero
+    end
+end)
+
+-- === 5. АВТО-ЭКИПИРОВКА И ХАКИ (BUSO) ===
+local function equipBestWeapon()
+    local char, _, hum = getCharacterParts()
+    if not char or not hum then return end
+
+    -- Авто-включение Хаки Вооружения (дает защиту и урон по логиям)
+    if getgenv().FarmConfig.AutoBuso and not char:FindFirstChild("HasBuso") then
+        pcall(function()
+            if CommF then CommF:InvokeServer("Buso") end
+        end)
+    end
+
+    -- Проверяем, одето ли уже нужное оружие
+    for _, item in ipairs(char:GetChildren()) do
+        if item:IsA("Tool") and (item.ToolTip == getgenv().FarmConfig.WeaponType or item.Name == getgenv().FarmConfig.WeaponType) then
+            return item
+        end
+    end
+
+    -- Ищем в рюкзаке по типу (Melee / Sword) или имени
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and (tool.ToolTip == getgenv().FarmConfig.WeaponType or tool.Name == getgenv().FarmConfig.WeaponType) then
+                hum:EquipTool(tool)
+                return tool
+            end
+        end
+    end
+end
+
+-- === 6. АВТО-СТАТЫ (ЗАЩИТА ОТ ВАНШОТОВ) ===
+task.spawn(function()
+    while task.wait(2) do
+        if getgenv().FarmConfig.Enabled and getgenv().FarmConfig.AutoStats and CommF then
+            pcall(function()
+                local points = LocalPlayer.Data.Points.Value
+                if points > 0 then
+                    -- Вливаем в защиту и ближний бой поровну, чтобы ХП всегда хватало
+                    CommF:InvokeServer("AddPoint", "Defense", math.ceil(points / 2))
+                    CommF:InvokeServer("AddPoint", "Melee", math.floor(points / 2))
+                end
+            end)
+        end
+    end
+end)
+
+-- === 7. ПОИСК ЖИВОГО МОБА И СТЯЖКА ПАЧКИ (BRING MOBS + HITBOX EXPANDER) ===
+local function getTargetAndCluster(rootPart)
+    if not EnemiesFolder then return nil end
+    local closestMob = nil
+    local shortestDist = math.huge
+
+    -- Ищем ближайшего живого моба
+    for _, mob in ipairs(EnemiesFolder:GetChildren()) do
+        local mHum = mob:FindFirstChildOfClass("Humanoid")
+        local mRoot = mob:FindFirstChild("HumanoidRootPart")
+        if mHum and mRoot and mHum.Health > 0 then
+            local dist = (mRoot.Position - rootPart.Position).Magnitude
+            if dist < shortestDist then
+                shortestDist = dist
+                closestMob = mob
+            end
+        end
+    end
+
+    -- Если нашли цель, стягиваем остальных мобов того же типа в эту же точку и расширяем хитбокс
+    if closestMob then
+        local targetRoot = closestMob:FindFirstChild("HumanoidRootPart")
+        if targetRoot then
+            pcall(function()
+                -- Расширяем хитбокс основной цели, чтобы удары сверху проходили на 100%
+                targetRoot.Size = getgenv().FarmConfig.HitboxSize
+                targetRoot.Transparency = 0.85
+                targetRoot.CanCollide = false
+                closestMob.Humanoid.WalkSpeed = 0
+                closestMob.Humanoid.JumpPower = 0
+            end)
+
+            -- Стягиваем соседних мобов (Bring Mobs)
+            for _, otherMob in ipairs(EnemiesFolder:GetChildren()) do
+                if otherMob ~= closestMob and otherMob.Name == closestMob.Name then
+                    local oHum = otherMob:FindFirstChildOfClass("Humanoid")
+                    local oRoot = otherMob:FindFirstChild("HumanoidRootPart")
+                    if oHum and oRoot and oHum.Health > 0 then
+                        local d = (oRoot.Position - targetRoot.Position).Magnitude
+                        if d <= getgenv().FarmConfig.BringMobRadius then
+                            pcall(function()
+                                if sethiddenproperty then
+                                    sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+                                end
+                                oRoot.CFrame = targetRoot.CFrame
+                                oRoot.Size = getgenv().FarmConfig.HitboxSize
+                                oRoot.Transparency = 0.85
+                                oRoot.CanCollide = false
+                                oHum.WalkSpeed = 0
+                                oHum.JumpPower = 0
+                                if oHum:FindFirstChild("Animator") then
+                                    oHum.Animator:Destroy() -- Вырубаем анимации атак мобам
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return closestMob
+end
+
+-- === 8. ЯДРО FAST ATTACK (УРОН БЕЗ ЗАДЕРЖЕК) ===
+task.spawn(function()
+    -- Попытка подцепить внутренний CombatFramework Blox Fruits для снятия кулдаунов
+    local CombatFramework = nil
+    local CombatController = nil
+    pcall(function()
+        local cfModule = LocalPlayer.PlayerScripts:WaitForChild("CombatFramework", 5)
+        if cfModule and getsenv then
+            CombatFramework = getsenv(cfModule)
+        elseif cfModule then
+            CombatFramework = require(cfModule)
+        end
+        if CombatFramework and debug and debug.getupvalues then
+            local upvals = debug.getupvalues(CombatFramework)
+            if upvals and upvals[2] then
+                CombatController = upvals[2].activeController
+            end
+        end
+    end)
+
+    -- Поиск сетевых эвентов нового регистратора атак (RegisterAttack / RegisterHit)
+    local NetRemoteAttack, NetRemoteHit = nil, nil
+    pcall(function()
+        for _, v in ipairs(ReplicatedStorage:GetDescendants()) do
+            if v:IsA("RemoteEvent") then
+                if v.Name == "RegisterAttack" then NetRemoteAttack = v end
+                if v.Name == "RegisterHit" then NetRemoteHit = v end
+            end
+        end
+    end)
+
+    while task.wait(0.06) do -- ~16 ударов в секунду (безопасный потолок без кика сервером)
+        if getgenv().FarmConfig.Enabled then
+            local char, root, hum = getCharacterParts()
+            if char and root and hum then
+                local hpRatio = hum.Health / hum.MaxHealth
+                -- Бьем только когда не находимся в режиме отхила
+                if hpRatio >= getgenv().FarmConfig.LowHpThreshold then
+                    pcall(function()
+                        -- 1. Сброс задержек через контроллер (если доступен в инжекторе)
+                        if CombatController then
+                            CombatController.timeToNextAttack = 0
+                            CombatController.attacking = false
+                            CombatController.increment = 3
+                            CombatController.blocking = false
+                            if CombatController.attack then
+                                CombatController:attack()
+                            end
+                        end
+
+                        -- 2. Прямая отправка пакетов урона по всем мобам в радиусе
+                        if NetRemoteAttack and NetRemoteHit and EnemiesFolder then
+                            local hitTargets = {}
+                            local mainPart = nil
+                            for _, mob in ipairs(EnemiesFolder:GetChildren()) do
+                                local mHum = mob:FindFirstChildOfClass("Humanoid")
+                                local mRoot = mob:FindFirstChild("HumanoidRootPart")
+                                if mHum and mRoot and mHum.Health > 0 and (mRoot.Position - root.Position).Magnitude <= 65 then
+                                    mainPart = mRoot
+                                    table.insert(hitTargets, {mob, mRoot})
+                                end
+                            end
+                            if mainPart and #hitTargets > 0 then
+                                NetRemoteAttack:FireServer(0)
+                                NetRemoteHit:FireServer(mainPart, hitTargets)
+                            end
+                        end
+
+                        -- 3. Фолбэк кликер (гарантирует удар на любом обновлении игры)
+                        VirtualUser:CaptureController()
+                        VirtualUser:Button1Down(Vector2.new(1280, 672))
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- === 9. ГЛАВНЫЙ ЦИКЛ ПОЗИЦИОНИРОВАНИЯ И БЕССМЕРТИЯ ===
+local isHealing = false
+
+task.spawn(function()
+    while RunService.Heartbeat:Wait() do
+        if getgenv().FarmConfig.Enabled then
+            local char, root, hum = getCharacterParts()
+            if char and root and hum then
+                local hpRatio = hum.Health / hum.MaxHealth
+
+                -- ПРОВЕРКА ЗДОРОВЬЯ (SAFE MODE)
+                if hpRatio < getgenv().FarmConfig.LowHpThreshold then
+                    isHealing = true
+                elseif isHealing and hpRatio >= getgenv().FarmConfig.RecoveredHpThreshold then
+                    isHealing = false
+                end
+
+                if isHealing then
+                    -- Улетаем вертикально вверх в безопасную зону, пока ХП не восстановится до 88%
+                    root.CFrame = CFrame.new(root.Position.X, root.Position.Y + getgenv().FarmConfig.EscapeHeight, root.Position.Z)
+                else
+                    -- Экипируем оружие и ищем цель
+                    equipBestWeapon()
+                    local targetMob = getTargetAndCluster(root)
+
+                    if targetMob and targetMob:FindFirstChild("HumanoidRootPart") then
+                        local tRoot = targetMob.HumanoidRootPart
+                        -- Зависаем ровно над головой моба и смотрим вертикально вниз (угол -90 градусов)
+                        local overheadPos = tRoot.Position + Vector3.new(0, getgenv().FarmConfig.SafeHeight, 0)
+                        root.CFrame = CFrame.new(overheadPos, tRoot.Position)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+print("[ollie bench]: immortal overhead + fast-attack online.")
