@@ -1,0 +1,356 @@
+-- Language: Lua (Luau) | File: farm_patched.lua | Runtime: Project Real / Windows & Android Executors
+-- Исправленная и стабилизированная версия: без утечек соединений, NaN CFrame и блокирующих вызовов.
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local VirtualUser = game:GetService("VirtualUser")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    LocalPlayer = Players.LocalPlayer
+end
+
+-- === ОЧИСТКА ПРЕДЫДУЩЕГО ЗАПУСКА (ЗАЩИТА ОТ УТЕЧЕК И ДУБЛИКАТОВ) ===
+local GlobalEnv = (getgenv and getgenv()) or _G
+if GlobalEnv.__FarmPatchedState then
+    pcall(function()
+        GlobalEnv.__FarmPatchedState.Running = false
+        for _, conn in ipairs(GlobalEnv.__FarmPatchedState.Connections) do
+            if conn and conn.Connected then
+                conn:Disconnect()
+            end
+        end
+    end)
+end
+
+local State = {
+    Running = true,
+    Connections = {},
+    IsHealing = false,
+    SafePosition = nil,
+    LastBusoAttempt = 0,
+    CachedNetAttack = nil,
+    CachedNetHit = nil,
+    CachedCommF = nil
+}
+GlobalEnv.__FarmPatchedState = State
+
+-- Безопасное уведомление
+local function sendNotification(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 4
+        })
+    end)
+end
+
+sendNotification("[OLLIE BENCH]", "Immortal Patch + FastAttack запущены!", 5)
+
+-- === НАСТРОЙКИ ПАТЧА ===
+local Config = {
+    Enabled = true,
+    OverheadOffset = 18,      -- Высота зависания над мобом (в стадах), чтобы мобы не доставали
+    SafeHpPercent = 0.38,     -- При 38% HP принудительно уводит персонажа вверх из боя
+    ResumeHpPercent = 0.85,   -- Возвращает в бой только при 85% HP
+    RecoveredHpPercent = 0.85,-- Алиас для обратной совместимости
+    SafeSkyHeight = 300,      -- Высота отхила (на 300 стадов выше боя)
+    EngageRadius = 35,        -- Дистанция перехвата позиции над мобом
+    AttackRadius = 65,        -- Радиус поражения Fast Attack
+    HitboxSize = 55,          -- Расширение хитбокса мобов (клиентское)
+    FastAttackDelay = 0.07,   -- Интервал ударов (сек)
+    BusoCooldown = 5.0,       -- Задержка между попытками включить Buso Haki (сек)
+    AutoBuso = true,          -- Авто-включение Хаки Вооружения
+    AutoStats = true          -- Авто-прокачка Defense + Melee
+}
+GlobalEnv.FarmPatchConfig = Config
+
+-- === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+local function getCharacterComponents()
+    local char = LocalPlayer.Character
+    if not char or not char.Parent then return nil, nil, nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 or hum.MaxHealth <= 0 then
+        return nil, nil, nil
+    end
+    return char, root, hum
+end
+
+local function resetZeroVelocity(root)
+    if not root then return end
+    pcall(function()
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function getCommF()
+    if State.CachedCommF and State.CachedCommF.Parent then
+        return State.CachedCommF
+    end
+    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+    local comm = rem and rem:FindFirstChild("CommF_")
+    State.CachedCommF = comm
+    return comm
+end
+
+local function getCombatRemotes()
+    if not State.CachedNetAttack or not State.CachedNetAttack.Parent then
+        State.CachedNetAttack = ReplicatedStorage:FindFirstChild("RegisterAttack", true)
+    end
+    if not State.CachedNetHit or not State.CachedNetHit.Parent then
+        State.CachedNetHit = ReplicatedStorage:FindFirstChild("RegisterHit", true)
+    end
+    return State.CachedNetAttack, State.CachedNetHit
+end
+
+-- Сброс состояния при респавне или смерти персонажа
+local function onCharacterReset()
+    State.IsHealing = false
+    State.SafePosition = nil
+end
+
+table.insert(State.Connections, LocalPlayer.CharacterAdded:Connect(function(newChar)
+    onCharacterReset()
+    local hum = newChar:WaitForChild("Humanoid", 10)
+    if hum then
+        table.insert(State.Connections, hum.Died:Connect(onCharacterReset))
+    end
+end))
+
+-- Анти-АФК
+table.insert(State.Connections, LocalPlayer.Idled:Connect(function()
+    if not State.Running or not Config.Enabled then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.zero)
+    end)
+end))
+
+-- === 1. ЗАЩИТА ОТ ПАДЕНИЯ, КОЛЛИЗИЙ И КОНТРОЛЬ ХП (NOCLIP + SAFE MODE) ===
+table.insert(State.Connections, RunService.Stepped:Connect(function()
+    if not State.Running or not Config.Enabled then return end
+
+    local char, root, hum = getCharacterComponents()
+    if not char or not root or not hum then
+        onCharacterReset()
+        return
+    end
+
+    -- Отключаем коллизии только у частей персонажа
+    for _, v in ipairs(char:GetChildren()) do
+        if v:IsA("BasePart") and v.CanCollide then
+            v.CanCollide = false
+        end
+    end
+
+    -- Проверка порога здоровья
+    local hpRatio = hum.Health / hum.MaxHealth
+    local resumeTarget = Config.ResumeHpPercent or Config.RecoveredHpPercent or 0.85
+
+    if hpRatio < Config.SafeHpPercent and not State.IsHealing then
+        State.IsHealing = true
+        State.SafePosition = Vector3.new(root.Position.X, math.max(root.Position.Y + Config.SafeSkyHeight, 350), root.Position.Z)
+        sendNotification("[SAFE MODE]", "Лоу ХП! Отлетаем на отхил...", 3)
+    elseif State.IsHealing and hpRatio >= resumeTarget then
+        State.IsHealing = false
+        State.SafePosition = nil
+        sendNotification("[SAFE MODE]", "ХП восстановлено! Возврат в бой.", 2)
+    end
+end))
+
+-- === 2. ПЕРЕХВАТ ПОЗИЦИИ НА КАЖДОМ КАДРЕ (БЕЗ ВЫРОЖДЕНИЯ МАТРИЦЫ CFRAME) ===
+table.insert(State.Connections, RunService.RenderStepped:Connect(function()
+    if not State.Running or not Config.Enabled then return end
+
+    local char, root, hum = getCharacterComponents()
+    if not char or not root or not hum then return end
+
+    local hpRatio = hum.Health / hum.MaxHealth
+    local resumeTarget = Config.ResumeHpPercent or Config.RecoveredHpPercent or 0.85
+    if State.IsHealing and hpRatio >= resumeTarget then
+        State.IsHealing = false
+        State.SafePosition = nil
+    end
+
+    -- Удержание в безопасной зоне при отхиле
+    if State.IsHealing and State.SafePosition then
+        resetZeroVelocity(root)
+        root.CFrame = CFrame.new(State.SafePosition)
+        return
+    end
+
+    -- Поиск ближайшего живого моба в радиусе боя
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+
+    local closestMobRoot = nil
+    local shortestDist = Config.EngageRadius
+
+    for _, mob in ipairs(enemies:GetChildren()) do
+        local mRoot = mob:FindFirstChild("HumanoidRootPart")
+        local mHum = mob:FindFirstChildOfClass("Humanoid")
+        if mRoot and mHum and mHum.Health > 0 then
+            -- Считаем горизонтальную и общую дистанцию, чтобы не терять лок, когда мы уже висим сверху
+            local dist = (mRoot.Position - root.Position).Magnitude
+            if dist <= shortestDist then
+                shortestDist = dist
+                closestMobRoot = mRoot
+            end
+        end
+    end
+
+    if closestMobRoot then
+        local mobPos = closestMobRoot.Position
+        local highPos = Vector3.new(mobPos.X, mobPos.Y + Config.OverheadOffset, mobPos.Z)
+        resetZeroVelocity(root)
+        -- Используем CFrame.lookAt с не-коллинеарным вектором верха (0, 0, -1), чтобы избежать NaN при взгляде строго вниз
+        root.CFrame = CFrame.lookAt(highPos, mobPos, Vector3.new(0, 0, -1))
+    end
+end))
+
+-- === 3. КЛИЕНТСКОЕ РАСШИРЕНИЕ ХИТБОКСОВ И ЗАМОРОЗКА МОБОВ ===
+task.spawn(function()
+    while State.Running do
+        task.wait(0.35)
+        if Config.Enabled then
+            local enemies = Workspace:FindFirstChild("Enemies")
+            if enemies then
+                local targetSize = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
+                for _, mob in ipairs(enemies:GetChildren()) do
+                    pcall(function()
+                        local mRoot = mob:FindFirstChild("HumanoidRootPart")
+                        local mHum = mob:FindFirstChildOfClass("Humanoid")
+                        if mRoot and mHum and mHum.Health > 0 then
+                            if mRoot.Size ~= targetSize then
+                                mRoot.Size = targetSize
+                                mRoot.Transparency = 0.85
+                            end
+                            if mRoot.CanCollide then
+                                mRoot.CanCollide = false
+                            end
+                            if mHum.WalkSpeed ~= 0 then
+                                mHum.WalkSpeed = 0
+                            end
+                            if mHum.JumpPower ~= 0 then
+                                mHum.JumpPower = 0
+                            end
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- === 4. УСИЛЕННЫЙ УРОН (FAST ATTACK + АВТО-ХАКИ С КУЛДАУНОМ) ===
+task.spawn(function()
+    while State.Running do
+        task.wait(math.max(Config.FastAttackDelay or 0.07, 0.03))
+        if Config.Enabled and not State.IsHealing then
+            pcall(function()
+                local char, root, hum = getCharacterComponents()
+                if not char or not root or not hum then return end
+
+                -- Авто-включение Buso Haki с защитой от спама
+                if Config.AutoBuso and not char:FindFirstChild("HasBuso") then
+                    local now = os.clock()
+                    if (now - State.LastBusoAttempt) >= Config.BusoCooldown then
+                        State.LastBusoAttempt = now
+                        local comm = getCommF()
+                        if comm then
+                            task.spawn(function()
+                                pcall(function() comm:InvokeServer("Buso") end)
+                            end)
+                        end
+                    end
+                end
+
+                -- Сбор всех живых целей в радиусе атаки
+                local enemies = Workspace:FindFirstChild("Enemies")
+                if not enemies then return end
+
+                local hitTargets = {}
+                local primaryPart = nil
+
+                for _, mob in ipairs(enemies:GetChildren()) do
+                    local mRoot = mob:FindFirstChild("HumanoidRootPart")
+                    local mHum = mob:FindFirstChildOfClass("Humanoid")
+                    if mRoot and mHum and mHum.Health > 0 then
+                        if (mRoot.Position - root.Position).Magnitude <= Config.AttackRadius then
+                            if not primaryPart then
+                                primaryPart = mRoot
+                            end
+                            table.insert(hitTargets, {mob, mRoot})
+                        end
+                    end
+                end
+
+                if primaryPart and #hitTargets > 0 then
+                    -- 1. Прямой сетевой вызов (если ремоуты существуют в текущей ревизии игры)
+                    local netAttack, netHit = getCombatRemotes()
+                    if netAttack and netHit then
+                        pcall(function()
+                            netAttack:FireServer(0)
+                            netHit:FireServer(primaryPart, hitTargets)
+                        end)
+                    end
+
+                    -- 2. Активация экипированного оружия (Tool:Activate)
+                    local equippedTool = char:FindFirstChildOfClass("Tool")
+                    if equippedTool then
+                        pcall(function()
+                            equippedTool:Activate()
+                        end)
+                    end
+
+                    -- 3. Корректный цикл нажатия и отпускания кнопки мыши через VirtualUser
+                    VirtualUser:CaptureController()
+                    VirtualUser:Button1Down(Vector2.new(640, 360))
+                    VirtualUser:Button1Up(Vector2.new(640, 360))
+                end
+            end)
+        end
+    end
+end)
+
+-- === 5. АВТО-СТАТЫ В ЗАЩИТУ И УРОН ===
+task.spawn(function()
+    while State.Running do
+        task.wait(3.0)
+        if Config.Enabled and Config.AutoStats then
+            pcall(function()
+                local comm = getCommF()
+                local dataFolder = LocalPlayer:FindFirstChild("Data")
+                local ptsObj = dataFolder and dataFolder:FindFirstChild("Points")
+
+                if comm and ptsObj and type(ptsObj.Value) == "number" and ptsObj.Value > 0 then
+                    local totalPoints = ptsObj.Value
+                    local defPoints = math.ceil(totalPoints / 2)
+                    local meleePoints = math.floor(totalPoints / 2)
+
+                    if defPoints > 0 then
+                        comm:InvokeServer("AddPoint", "Defense", defPoints)
+                    end
+                    if meleePoints > 0 then
+                        comm:InvokeServer("AddPoint", "Melee", meleePoints)
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- =========================================================================
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/matvujfff/my-lua-scripts/main/Gemini%205.2"))():
+-- =========================================================================
