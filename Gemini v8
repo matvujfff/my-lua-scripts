@@ -1,0 +1,1119 @@
+-- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8 - TURBO & ANTI-LOCK MONOLITH ]] --
+-- Language: Lua 5.1 / Luau | Runtime: Delta / Project Real / Windows & Android Executors
+-- База: Проверенный простой цикл V6.1 (1-150 лвл) + фикс высот 150-700 лвл + 2x EXP коды + защита от Account Locked.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.2)
+    LocalPlayer = Players.LocalPlayer
+end
+
+-- Индивидуальный рандом-сид для каждого окна (убирает одинаковые тайминги ударов между ботами)
+math.randomseed((LocalPlayer.UserId % 1000000) + math.floor((os.clock() % 1) * 1000000) + os.time())
+for _ = 1, 4 do math.random() end
+
+-- === УНИКАЛЬНЫЙ ТОКЕН ЗАПУСКА (ОСТАНАВЛИВАЕТ СТАРЫЕ ПОТОКИ V2-V8 БЕЗ ДУБЛЕЙ) ===
+local Env = (getgenv and getgenv()) or _G
+Env.OllieV5_Running = false
+Env.OllieV5_Enabled = false
+Env.OllieV6_Running = false
+Env.OllieV6_Enabled = false
+Env.OllieV7_Running = false
+Env.OllieV7_Enabled = false
+
+local MyRunId = (tonumber(Env.OllieV8_RunId) or 0) + 1
+Env.OllieV8_RunId = MyRunId
+Env.OllieV8_Running = true
+Env.OllieV8_Enabled = true
+
+for _, connKey in ipairs({"OllieV6_Connections", "OllieV7_Connections", "OllieV8_Connections"}) do
+    if type(Env[connKey]) == "table" then
+        for _, conn in ipairs(Env[connKey]) do
+            pcall(function()
+                if conn and conn.Connected then
+                    conn:Disconnect()
+                end
+            end)
+        end
+    end
+end
+Env.OllieV8_Connections = {}
+
+local function isRunActive()
+    return Env.OllieV8_Running == true and Env.OllieV8_RunId == MyRunId
+end
+
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "OLLIE ENGINE V8",
+        Text = "Запуск V8: 2X EXP Коды + Анти-Лок + Полный маршрут 1-700!",
+        Duration = 5
+    })
+end)
+
+-- === КОНФИГУРАЦИЯ V8 ===
+local MAX_LEVEL = 700
+
+local Config = {
+    TargetMaxLevel = MAX_LEVEL,
+    AutoRedeemCodes = true,     -- Авто-ввод всех кодов на 2x EXP при старте (ускоряет прокачку в 2 раза)
+    AutoStats = true,
+    AutoBuyBlackLeg = true,     -- Авто-покупка стиля боя Black Leg за $150k (бьет быстрее и дальше базовых кулаков)
+    AutoRollFruit = false,      -- ВЫКЛЮЧЕНО по умолчанию (спам Cousin каждые 4с вызывал Account Locked и сливал Beli!)
+    FruitRollCooldown = 900,    -- Если AutoRollFruit = true, пробовать не чаще раза в 15 минут (900 сек)
+    BringMobs = true,
+    FlightSpeed = 195,          -- Быстрая безопасная скорость без отката позиции сервером
+    LoopInterval = 0.12,
+    AttackMinDelay = 0.11,      -- Плавающий интервал удара (0.11 - 0.15 сек) против детекта макросов/ботов
+    AttackMaxDelay = 0.15,
+    WeaponType = "Melee",
+    AttackHeight = 16.5,        -- Безопасная высота над мобом (мобы не достают, твои удары проходят сверху)
+    AttackBackOffset = 2.0,     -- Смещение по Z (исключает NaN в CFrame.new)
+    MobHitboxSize = 55,         -- Размер хитбокса мобов
+    SafeModeEnabled = true,     -- Уход на отхил при низком ХП
+    LowHpThreshold = 0.35,      -- Порог включения отхила (35% HP)
+    RecoverHpThreshold = 0.85,  -- Порог возврата в бой (85% HP)
+    SafeSkyOffset = 200,        -- Высота взлета для безопасного регена ХП
+    BusoRetryCooldown = 8.0,    -- Задержка между попытками включить Buso Haki
+    SpawnPatrolInterval = 3.0   -- Переключение между живыми точками спавна мобов
+}
+
+-- ============================================================================
+-- 1. ОН-СКРИН ПАНЕЛЬ УПРАВЛЕНИЯ (HUD V8)
+-- ============================================================================
+local StatusLabelRef = nil
+local SubInfoLabelRef = nil
+
+local function buildHUD(onHopClicked)
+    local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not pGui or not isRunActive() then return end
+
+    for _, oldName in ipairs({"OllieHudV2", "OllieHudV3", "OllieHudV4", "OllieHudV5", "OllieHudV6", "OllieHudV7", "OllieHudV7_1", "OllieHudV7_2", "OllieHudV8"}) do
+        local old = pGui:FindFirstChild(oldName)
+        if old then old:Destroy() end
+    end
+
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "OllieHudV8"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 999999
+    screen.IgnoreGuiInset = true
+    screen.Parent = pGui
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 305, 0, 122)
+    main.Position = UDim2.new(0, 14, 0, 42)
+    main.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+    main.BorderSizePixel = 2
+    main.BorderColor3 = Color3.fromRGB(0, 255, 136)
+    main.Parent = screen
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, -12, 0, 22)
+    header.Position = UDim2.new(0, 6, 0, 4)
+    header.BackgroundTransparency = 1
+    header.Text = "OLLIE BF ENGINE V8 [TURBO STEALTH]"
+    header.TextColor3 = Color3.fromRGB(0, 255, 136)
+    header.Font = Enum.Font.SourceSansBold
+    header.TextSize = 15
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = main
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -12, 0, 34)
+    status.Position = UDim2.new(0, 6, 0, 26)
+    status.BackgroundTransparency = 1
+    status.Text = "Статус: Инициализация..."
+    status.TextColor3 = Color3.fromRGB(240, 240, 240)
+    status.Font = Enum.Font.SourceSans
+    status.TextSize = 14
+    status.TextWrapped = true
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.TextYAlignment = Enum.TextYAlignment.Top
+    status.Parent = main
+
+    local subinfo = Instance.new("TextLabel")
+    subinfo.Size = UDim2.new(1, -12, 0, 18)
+    subinfo.Position = UDim2.new(0, 6, 0, 62)
+    subinfo.BackgroundTransparency = 1
+    subinfo.Text = "LVL: -- | Квест: --"
+    subinfo.TextColor3 = Color3.fromRGB(175, 185, 205)
+    subinfo.Font = Enum.Font.SourceSans
+    subinfo.TextSize = 13
+    subinfo.TextXAlignment = Enum.TextXAlignment.Left
+    subinfo.Parent = main
+
+    local btnToggle = Instance.new("TextButton")
+    btnToggle.Size = UDim2.new(0, 136, 0, 28)
+    btnToggle.Position = UDim2.new(0, 8, 0, 86)
+    btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
+    btnToggle.BorderSizePixel = 0
+    btnToggle.Text = "ФАРМ: ВКЛ"
+    btnToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnToggle.Font = Enum.Font.SourceSansBold
+    btnToggle.TextSize = 14
+    btnToggle.Parent = main
+
+    local btnHop = Instance.new("TextButton")
+    btnHop.Size = UDim2.new(0, 136, 0, 28)
+    btnHop.Position = UDim2.new(0, 156, 0, 86)
+    btnHop.BackgroundColor3 = Color3.fromRGB(45, 100, 210)
+    btnHop.BorderSizePixel = 0
+    btnHop.Text = "СМЕНА СЕРВЕРА"
+    btnHop.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnHop.Font = Enum.Font.SourceSansBold
+    btnHop.TextSize = 14
+    btnHop.Parent = main
+
+    StatusLabelRef = status
+    SubInfoLabelRef = subinfo
+
+    local lastToggle = 0
+    local function handleToggle()
+        if tick() - lastToggle < 0.35 then return end
+        lastToggle = tick()
+        Env.OllieV8_Enabled = not Env.OllieV8_Enabled
+        if Env.OllieV8_Enabled then
+            btnToggle.Text = "ФАРМ: ВКЛ"
+            btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
+            header.Text = "OLLIE BF ENGINE V8 [TURBO STEALTH]"
+            header.TextColor3 = Color3.fromRGB(0, 255, 136)
+            main.BorderColor3 = Color3.fromRGB(0, 255, 136)
+        else
+            btnToggle.Text = "ФАРМ: ПАУЗА"
+            btnToggle.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+            header.Text = "OLLIE BF ENGINE V8 [PAUSED]"
+            header.TextColor3 = Color3.fromRGB(255, 80, 80)
+            main.BorderColor3 = Color3.fromRGB(255, 80, 80)
+            status.Text = "Статус: На паузе"
+        end
+    end
+
+    table.insert(Env.OllieV8_Connections, btnToggle.Activated:Connect(handleToggle))
+
+    local lastHop = 0
+    local function triggerHop()
+        if tick() - lastHop < 2.0 then return end
+        lastHop = tick()
+        if onHopClicked then
+            task.spawn(onHopClicked)
+        end
+    end
+
+    table.insert(Env.OllieV8_Connections, btnHop.Activated:Connect(triggerHop))
+end
+
+local function logStatus(msg, lvl, qName)
+    if not isRunActive() then return end
+    pcall(function()
+        if StatusLabelRef then
+            StatusLabelRef.Text = "Статус: " .. tostring(msg)
+        end
+        if SubInfoLabelRef and (lvl or qName) then
+            SubInfoLabelRef.Text = string.format("LVL: %s/%d | Квест: %s", tostring(lvl or "--"), MAX_LEVEL, tostring(qName or "--"))
+        end
+    end)
+end
+
+-- ============================================================================
+-- 2. БЕЗОПАСНЫЙ SERVER HOP (БЕЗ ПАРАЛЛЕЛЬНОГО СПАМА TELEPORTSERVICE)
+-- ============================================================================
+local IsHopping = false
+local function performServerHop()
+    if IsHopping or not isRunActive() then return end
+    IsHopping = true
+    logStatus("Поиск чистого сервера...")
+
+    local placeId = game.PlaceId
+    local currentJob = tostring(game.JobId)
+    local teleportInitiated = false
+
+    pcall(function()
+        local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true"
+        local reqFunc = (http_request or request or (syn and syn.request))
+        local rawBody = nil
+        if reqFunc then
+            local r = reqFunc({ Url = url, Method = "GET" })
+            if r and tonumber(r.StatusCode) == 200 then
+                rawBody = r.Body
+            end
+        elseif game.HttpGet then
+            rawBody = game:HttpGet(url)
+        end
+
+        if rawBody then
+            local decoded = HttpService:JSONDecode(rawBody)
+            if decoded and type(decoded.data) == "table" then
+                local list = decoded.data
+                for i = #list, 2, -1 do
+                    local j = math.random(i)
+                    list[i], list[j] = list[j], list[i]
+                end
+                for i = 1, #list do
+                    local srv = list[i]
+                    if type(srv) == "table" and tostring(srv.id) ~= currentJob and tonumber(srv.playing) and srv.playing >= 2 and srv.playing <= 8 then
+                        logStatus("Телепорт на сервер: " .. string.sub(tostring(srv.id), 1, 8))
+                        teleportInitiated = true
+                        TeleportService:TeleportToPlaceInstance(placeId, srv.id, LocalPlayer)
+                        break
+                    end
+                end
+            end
+        end
+    end)
+
+    if not teleportInitiated then
+        logStatus("Нативный TeleportService:Teleport...")
+        pcall(function()
+            TeleportService:Teleport(placeId, LocalPlayer)
+        end)
+    end
+
+    task.wait(8)
+    IsHopping = false
+end
+
+buildHUD(performServerHop)
+
+-- Анти-АФК с плавающей точкой клика
+table.insert(Env.OllieV8_Connections, LocalPlayer.Idled:Connect(function()
+    if not isRunActive() then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        local camCF = (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame) or CFrame.new()
+        local rx, ry = math.random(400, 700), math.random(200, 400)
+        VirtualUser:Button2Down(Vector2.new(rx, ry), camCF)
+        task.wait(0.8 + (math.random(1, 4) / 10))
+        VirtualUser:Button2Up(Vector2.new(rx, ry), camCF)
+    end)
+end))
+
+-- ============================================================================
+-- 3. РАБОТА С REMOTES, 2X EXP КОДЫ И ПРОВЕРКА QUEST GUI (КАК В РАБОЧЕМ V6.1)
+-- ============================================================================
+local function getCommF()
+    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+    return rem and rem:FindFirstChild("CommF_")
+end
+
+-- Авто-ввод всех промокодов на 2x EXP (1 раз при старте скрипта с плавной паузой)
+local CodesRedeemed = false
+local function redeemAllExpCodesOnce()
+    if CodesRedeemed or not Config.AutoRedeemCodes then return end
+    CodesRedeemed = true
+    task.spawn(function()
+        task.wait(3)
+        local rem = ReplicatedStorage:FindFirstChild("Remotes")
+        local redeemRemote = rem and rem:FindFirstChild("Redeem")
+        if not redeemRemote then return end
+
+        local expCodes = {
+            "KITT_RESET", "Sub2CaptainMaui", "kittgaming", "Sub2Fer999",
+            "Enyu_is_Pro", "Magicbus", "JCWK", "Starcodeheo", "Bluxxy",
+            "fudd10_v2", "SUB2GAMERROBOT_EXP1", "Sub2NoobMaster123",
+            "Sub2UncleKizaru", "Sub2Daigrock", "Axiore", "TantaiGaming",
+            "StrawHatMaine", "Sub2OfficialNoobie", "TheGreatAce"
+        }
+        for _, code in ipairs(expCodes) do
+            if not isRunActive() then break end
+            pcall(function()
+                redeemRemote:InvokeServer(code)
+            end)
+            task.wait(0.45 + (math.random(1, 3) / 10))
+        end
+    end)
+end
+
+local function ensureTeam()
+    if not LocalPlayer.Team or (LocalPlayer.Team.Name ~= "Pirates" and LocalPlayer.Team.Name ~= "Marines") then
+        logStatus("Выбираем команду Pirates...")
+        pcall(function()
+            local comm = getCommF()
+            if comm then
+                comm:InvokeServer("SetTeam", "Pirates")
+            end
+        end)
+        task.wait(1.2)
+        return false
+    end
+    redeemAllExpCodesOnce()
+    return true
+end
+
+-- Проверенная функция из твоего рабочего V6.1 (работает на любом языке интерфейса!)
+local function isQuestGuiVisible()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return false end
+
+    for _, gui in ipairs(pGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV8" then
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if obj.Name == "Quest" and obj:IsA("GuiObject") and obj.Visible then
+                    local parent = obj.Parent
+                    local chainVisible = true
+                    while parent and parent ~= gui do
+                        if parent:IsA("GuiObject") and not parent.Visible then
+                            chainVisible = false
+                            break
+                        end
+                        parent = parent.Parent
+                    end
+                    if chainVisible then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function clearBlockingDialogue()
+    pcall(function()
+        local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not pGui then return end
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                local dlg = gui:FindFirstChild("Dialogue", true)
+                if dlg and dlg:IsA("GuiObject") and dlg.Visible then
+                    local opt1 = dlg:FindFirstChild("Option1", true)
+                    if opt1 and firesignal then
+                        pcall(function() firesignal(opt1.MouseButton1Click) end)
+                        pcall(function() firesignal(opt1.Activated) end)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Точный префиксный фильтр имени моба (отсекает Dangerous Prisoner от Prisoner и Galley Pirate от Pirate)
+local function mobNameMatches(enemyName, mobName)
+    local n, m = string.lower(enemyName), string.lower(mobName)
+    if string.sub(n, 1, #m) ~= m then return false end
+    local c = string.sub(n, #m + 1, #m + 1)
+    return c == "" or c == " " or c == "["
+end
+
+-- ============================================================================
+-- 4. ТАБЛИЦА КВЕСТОВ SEA 1 (1–700 ЛВЛ С ИСПРАВЛЕННЫМИ ВЫСОТАМИ Y И ПОРТАЛАМИ)
+-- ============================================================================
+local QuestsSea1 = {
+    {Min = 1,   Max = 9,             Mob = "Bandit",              NPC = "Bandit Quest Giver",    QName = "BanditQuest1",   QNum = 1, QPos = CFrame.new(1059.37, 16.36, 1549.25),   MPos = CFrame.new(1145.00, 17.00, 1634.00)},
+    {Min = 10,  Max = 14,            Mob = "Monkey",              NPC = "Adventurer",            QName = "JungleQuest",    QNum = 1, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1448.51, 67.85, 11.46)},
+    {Min = 15,  Max = 29,            Mob = "Gorilla",             NPC = "Adventurer",            QName = "JungleQuest",    QNum = 2, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1129.88, 40.46, -525.42)},
+    {Min = 30,  Max = 39,            Mob = "Pirate",              NPC = "Pirate Adventurer",     QName = "BuggyQuest1",    QNum = 1, QPos = CFrame.new(-1141.07, 4.10, 3831.54),   MPos = CFrame.new(-1103.51, 13.75, 3896.09)},
+    {Min = 40,  Max = 59,            Mob = "Brute",               NPC = "Pirate Adventurer",     QName = "BuggyQuest1",    QNum = 2, QPos = CFrame.new(-1141.07, 4.10, 3831.54),   MPos = CFrame.new(-1140.08, 14.80, 4322.92)},
+    {Min = 60,  Max = 74,            Mob = "Desert Bandit",       NPC = "Desert Adventurer",     QName = "DesertQuest",    QNum = 1, QPos = CFrame.new(894.48, 5.14, 4392.43),     MPos = CFrame.new(924.79, 6.44, 4481.58)},
+    {Min = 75,  Max = 89,            Mob = "Desert Officer",      NPC = "Desert Adventurer",     QName = "DesertQuest",    QNum = 2, QPos = CFrame.new(894.48, 5.14, 4392.43),     MPos = CFrame.new(1608.28, 8.61, 4371.00)},
+    {Min = 90,  Max = 99,            Mob = "Snow Bandit",         NPC = "Villager",              QName = "SnowQuest",      QNum = 1, QPos = CFrame.new(1389.74, 88.15, -1298.90),  MPos = CFrame.new(1354.34, 87.27, -1393.94)},
+    {Min = 100, Max = 119,           Mob = "Snowman",             NPC = "Villager",              QName = "SnowQuest",      QNum = 2, QPos = CFrame.new(1389.74, 88.15, -1298.90),  MPos = CFrame.new(1201.64, 144.57, -1550.06)},
+    {Min = 120, Max = 149,           Mob = "Chief Petty Officer", NPC = "Marine",                QName = "MarineQuest2",   QNum = 1, QPos = CFrame.new(-5039.58, 27.35, 4324.68),  MPos = CFrame.new(-4881.23, 22.65, 4273.75)},
+    -- ИСПРАВЛЕНО: Реальная высота Y для Sky Bandit (717.74 вместо 295.74) и Dark Master (791.39 вместо 391.39)
+    {Min = 150, Max = 174,           Mob = "Sky Bandit",          NPC = "Sky Adventurer",        QName = "SkyQuest",       QNum = 1, QPos = CFrame.new(-4839.53, 716.36, -2619.44), MPos = CFrame.new(-4953.20, 717.74, -2899.22)},
+    {Min = 175, Max = 189,           Mob = "Dark Master",         NPC = "Sky Adventurer",        QName = "SkyQuest",       QNum = 2, QPos = CFrame.new(-4839.53, 716.36, -2619.44), MPos = CFrame.new(-5259.84, 791.39, -2229.03)},
+    {Min = 190, Max = 209,           Mob = "Prisoner",            NPC = "Warden",                QName = "PrisonerQuest",  QNum = 1, QPos = CFrame.new(5308.93, 1.65, 475.12),     MPos = CFrame.new(5098.97, 8.50, 474.23)},
+    {Min = 210, Max = 249,           Mob = "Dangerous Prisoner",  NPC = "Warden",                QName = "PrisonerQuest",  QNum = 2, QPos = CFrame.new(5308.93, 1.65, 475.12),     MPos = CFrame.new(5654.56, 15.63, 866.29)},
+    {Min = 250, Max = 274,           Mob = "Toga Warrior",        NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1820.21, 51.68, -2740.66)},
+    {Min = 275, Max = 299,           Mob = "Gladiator",           NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 2, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1292.83, 56.38, -3339.03)},
+    {Min = 300, Max = 324,           Mob = "Military Soldier",    NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 1, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5411.16, 11.08, 8454.29)},
+    {Min = 325, Max = 374,           Mob = "Military Spy",        NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 2, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5802.86, 86.26, 8828.85)},
+    {Min = 375, Max = 399,           Mob = "Fishman Warrior",     NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 1, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(60878.30, 18.48, 1543.75)},
+    {Min = 400, Max = 449,           Mob = "Fishman Commando",    NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 2, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(61922.63, 18.48, 1493.93)},
+    {Min = 450, Max = 474,           Mob = "God's Guard",         NPC = "Mole",                  QName = "SkyExp1Quest",   QNum = 1, QPos = CFrame.new(-4721.88, 843.87, -1949.96), MPos = CFrame.new(-4710.04, 845.27, -1927.30)},
+    {Min = 475, Max = 524,           Mob = "Shanda",              NPC = "SkyExp1",               QName = "SkyExp1Quest",   QNum = 2, QPos = CFrame.new(-7859.09, 5544.19, -381.47), MPos = CFrame.new(-7678.48, 5566.40, -497.21)},
+    {Min = 525, Max = 549,           Mob = "Royal Squad",         NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 1, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7624.25, 5658.13, -1467.35)},
+    {Min = 550, Max = 624,           Mob = "Royal Soldier",       NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 2, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7836.75, 5645.66, -1790.62)},
+    {Min = 625, Max = 649,           Mob = "Galley Pirate",       NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 1, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5551.02, 78.90, 3930.41)},
+    {Min = 650, Max = MAX_LEVEL - 1, Mob = "Galley Captain",      NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 2, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5649.95, 38.53, 4936.26)}
+}
+
+local Sea1Portals = {
+    FishmanInside  = Vector3.new(61163.8515625, 11.6796875, 1819.7841796875),
+    FishmanOutside = Vector3.new(3864.6884765625, 6.73695755, -1926.2141113),
+    SkyTemple      = Vector3.new(-4607.82275, 872.54248, -1667.55688),
+    SkyUpperYard   = Vector3.new(-7894.617675, 5547.14160, -380.291198)
+}
+
+local LastPortalInvoke = 0
+local LastStreamRequest = 0
+
+local function requestStreamThrottled(pos)
+    if tick() - LastStreamRequest >= 1.5 then
+        LastStreamRequest = tick()
+        pcall(function()
+            LocalPlayer:RequestStreamAroundAsync(pos)
+        end)
+    end
+end
+
+local function tryFastPortalTransition(rootPart, targetPos)
+    if not rootPart or (tick() - LastPortalInvoke) < 4.0 then return false end
+    local curPos = rootPart.Position
+    local comm = getCommF()
+    if not comm then return false end
+
+    local portalToUse = nil
+    if targetPos.X > 50000 and curPos.X < 40000 then
+        portalToUse = Sea1Portals.FishmanInside
+    elseif targetPos.X < 40000 and curPos.X > 50000 then
+        portalToUse = Sea1Portals.FishmanOutside
+    elseif targetPos.Y > 4500 and curPos.Y < 3500 then
+        portalToUse = Sea1Portals.SkyUpperYard
+    elseif targetPos.Y > 780 and targetPos.Y < 1200 and (curPos - targetPos).Magnitude > 3500 then
+        portalToUse = Sea1Portals.SkyTemple
+    end
+
+    if portalToUse then
+        LastPortalInvoke = tick()
+        pcall(function()
+            comm:InvokeServer("requestEntrance", portalToUse)
+        end)
+        task.wait(0.4)
+        return true
+    end
+    return false
+end
+
+local function getQuestByLevel()
+    local d = LocalPlayer:FindFirstChild("Data")
+    local l = d and d:FindFirstChild("Level")
+    local lvl = (l and l.Value) or 1
+    for i = 1, #QuestsSea1 do
+        local q = QuestsSea1[i]
+        if lvl >= q.Min and lvl <= q.Max then
+            return q, lvl
+        end
+    end
+    return QuestsSea1[#QuestsSea1], lvl
+end
+
+local function getLiveNPCCFrame(qData)
+    local npcFolders = {
+        Workspace:FindFirstChild("NPCs"),
+        ReplicatedStorage:FindFirstChild("NPCs")
+    }
+    for _, folder in ipairs(npcFolders) do
+        if folder then
+            if qData.NPC then
+                local exact = folder:FindFirstChild(qData.NPC)
+                if exact then
+                    local r = exact:FindFirstChild("HumanoidRootPart") or exact:FindFirstChild("Head") or exact.PrimaryPart
+                    if r and (r.Position - qData.QPos.Position).Magnitude <= 250 then
+                        return r.CFrame * CFrame.new(0, 0, -2.5)
+                    end
+                end
+            end
+            local bestCF = nil
+            local bestDist = 60
+            for _, npc in ipairs(folder:GetChildren()) do
+                local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+                if r then
+                    local d = (r.Position - qData.QPos.Position).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        bestCF = r.CFrame * CFrame.new(0, 0, -2.5)
+                    end
+                end
+            end
+            if bestCF then
+                return bestCF
+            end
+        end
+    end
+    return qData.QPos
+end
+
+-- Чтение реальных точек спавна мобов из Workspace._WorldOrigin.EnemySpawns (с кэшем на 10 сек)
+local WaypointCache = { Key = "", Time = 0, List = {} }
+local function getMobSpawnWaypoints(qData)
+    local key = qData.QName .. "_" .. tostring(qData.QNum)
+    if WaypointCache.Key == key and (tick() - WaypointCache.Time) < 10.0 and #WaypointCache.List > 0 then
+        return WaypointCache.List
+    end
+
+    local points = {}
+    local worldOrigin = Workspace:FindFirstChild("_WorldOrigin")
+    local enemySpawns = worldOrigin and worldOrigin:FindFirstChild("EnemySpawns")
+    if enemySpawns then
+        for _, sp in ipairs(enemySpawns:GetChildren()) do
+            if mobNameMatches(sp.Name, qData.Mob) or string.find(string.lower(sp.Name), string.lower(qData.Mob), 1, true) then
+                local pos = (sp:IsA("BasePart") and sp.Position)
+                    or (sp:IsA("Model") and sp.PrimaryPart and sp.PrimaryPart.Position)
+                if pos and math.abs(pos.Y - qData.MPos.Position.Y) <= 180 then
+                    local hoverPos = pos + Vector3.new(0, Config.AttackHeight, 0)
+                    local dup = false
+                    for _, ex in ipairs(points) do
+                        if (ex.Position - hoverPos).Magnitude < 12 then dup = true break end
+                    end
+                    if not dup then
+                        table.insert(points, CFrame.new(hoverPos))
+                    end
+                end
+            end
+        end
+    end
+
+    table.insert(points, qData.MPos * CFrame.new(0, Config.AttackHeight, 0))
+    WaypointCache.Key = key
+    WaypointCache.Time = tick()
+    WaypointCache.List = points
+    return points
+end
+
+-- ============================================================================
+-- 5. КОНТРОЛЛЕР ПОЛЕТА И STEPPED NOCLIP (С АВТО-ОБХОДОМ БАРЬЕРОВ ПО ВЕРХУ)
+-- ============================================================================
+local DesiredGoalCFrame = nil
+local GroundedAtNPC = false
+local IsHealingState = false
+local SafeHealCFrame = nil
+local ActiveCombatMob = nil
+local LastBusoTry = 0
+local ZeroVec = Vector3.new(0, 0, 0)
+local HugeVec = Vector3.new(1e9, 1e9, 1e9)
+
+local LastStuckCheck = 0
+local LastStuckPos = nil
+local ClimbBypassUntil = 0
+local ClimbTargetY = 0
+
+table.insert(Env.OllieV8_Connections, LocalPlayer.CharacterAdded:Connect(function()
+    DesiredGoalCFrame = nil
+    GroundedAtNPC = false
+    IsHealingState = false
+    SafeHealCFrame = nil
+    ActiveCombatMob = nil
+    ClimbBypassUntil = 0
+end))
+
+-- Отключение коллизий ДО шага физики (чтобы не упираться в края крыш и стен)
+table.insert(Env.OllieV8_Connections, RunService.Stepped:Connect(function()
+    if not isRunActive() or not Env.OllieV8_Enabled or GroundedAtNPC then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Sit then hum.Sit = false end
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
+        end
+    end
+end))
+
+table.insert(Env.OllieV8_Connections, RunService.Heartbeat:Connect(function(dt)
+    if not isRunActive() then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return end
+
+    if not Env.OllieV8_Enabled or hum.Health <= 0 or GroundedAtNPC then
+        local bv = root:FindFirstChild("OllieBV")
+        if bv then bv:Destroy() end
+        if GroundedAtNPC or not Env.OllieV8_Enabled then
+            root.CanCollide = true
+        end
+        return
+    end
+
+    local bv = root:FindFirstChild("OllieBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "OllieBV"
+        bv.MaxForce = HugeVec
+        bv.Velocity = ZeroVec
+        bv.Parent = root
+    else
+        bv.Velocity = ZeroVec
+    end
+
+    pcall(function()
+        root.AssemblyLinearVelocity = ZeroVec
+        root.AssemblyAngularVelocity = ZeroVec
+    end)
+
+    if DesiredGoalCFrame then
+        local curPos = root.Position
+        local dstPos = DesiredGoalCFrame.Position
+        local totalDist = (dstPos - curPos).Magnitude
+        local now = tick()
+
+        -- Если летим далеко, но уперлись в преграду (за 0.8 с сдвинулись меньше чем на 8 стадов) — поднимаемся на +135 стадов вверх
+        if totalDist > 20 then
+            if (now - LastStuckCheck) >= 0.8 then
+                if LastStuckPos and (curPos - LastStuckPos).Magnitude < 8.0 and now > ClimbBypassUntil then
+                    ClimbBypassUntil = now + 2.0
+                    ClimbTargetY = math.max(curPos.Y, dstPos.Y) + 135
+                end
+                LastStuckPos = curPos
+                LastStuckCheck = now
+            end
+        else
+            ClimbBypassUntil = 0
+            LastStuckPos = curPos
+        end
+
+        local stepGoal = dstPos
+        local horizGap = Vector3.new(dstPos.X - curPos.X, 0, dstPos.Z - curPos.Z).Magnitude
+        if now < ClimbBypassUntil and horizGap > 14 then
+            if curPos.Y < (ClimbTargetY - 10) then
+                -- Сначала вертикальный подъем над стеной
+                stepGoal = Vector3.new(curPos.X, ClimbTargetY, curPos.Z)
+            else
+                -- Затем горизонтальный пролет над преградой
+                stepGoal = Vector3.new(dstPos.X, ClimbTargetY, dstPos.Z)
+            end
+        end
+
+        local delta = stepGoal - curPos
+        local dist = delta.Magnitude
+
+        if totalDist <= 6.0 then
+            root.CFrame = DesiredGoalCFrame
+        elseif dist > 0.05 then
+            local step = math.min(dist, Config.FlightSpeed * dt)
+            local nextPos = curPos + (delta.Unit * step)
+            local horizDist = Vector3.new(dstPos.X - nextPos.X, 0, dstPos.Z - nextPos.Z).Magnitude
+            if horizDist > 0.05 then
+                root.CFrame = CFrame.new(nextPos, dstPos)
+            else
+                root.CFrame = CFrame.new(nextPos) * DesiredGoalCFrame.Rotation
+            end
+        end
+    end
+end))
+
+-- ============================================================================
+-- 6. БОЕВАЯ СИСТЕМА: ТОЧНЫЙ ПОИСК МОБА И STEALTH FAST-ATTACK С ДЖИТТЕРОМ
+-- ============================================================================
+local function equipBestTool()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum or hum.Health <= 0 then return nil end
+
+    local eq = char:FindFirstChildOfClass("Tool")
+    if eq and (eq.ToolTip == Config.WeaponType or eq.Name == "Combat" or eq.Name == "Black Leg") then
+        return eq
+    end
+
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if item:IsA("Tool") and (item.ToolTip == Config.WeaponType or item.Name == "Black Leg" or item.Name == "Combat") then
+                hum:EquipTool(item)
+                return item
+            end
+        end
+        local firstTool = bp:FindFirstChildOfClass("Tool")
+        if firstTool then
+            hum:EquipTool(firstTool)
+            return firstTool
+        end
+    end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+local function findTargetMob(qData)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+
+    local bestMob = nil
+    local bestDist = math.huge
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local refPos = (myRoot and myRoot.Position) or qData.MPos.Position
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if mobNameMatches(m.Name, qData.Mob) then
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            if mh and mr and mh.Health > 0 and mr.Position.Y > -300 then
+                local d = (mr.Position - refPos).Magnitude
+                if d < bestDist then
+                    bestDist = d
+                    bestMob = m
+                end
+            end
+        end
+    end
+    return bestMob
+end
+
+local function pullMobsTogether(mobName, targetPos)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    local boxVec = Vector3.new(Config.MobHitboxSize, Config.MobHitboxSize, Config.MobHitboxSize)
+
+    pcall(function()
+        if sethiddenproperty then
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        end
+    end)
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if mobNameMatches(m.Name, mobName) then
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            if mr and mh and mh.Health > 0 and (mr.Position - targetPos).Magnitude <= 260 then
+                pcall(function()
+                    mr.CanCollide = false
+                    mr.Size = boxVec
+                    mr.Transparency = 0.85
+                    mr.AssemblyLinearVelocity = ZeroVec
+                    mh.WalkSpeed = 0
+                    mh.JumpPower = 0
+                    if Config.BringMobs then
+                        mr.CFrame = CFrame.new(targetPos)
+                    end
+                end)
+            end
+        end
+    end
+end
+
+local function executeAttack(mob)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not root then return end
+
+    if not char:FindFirstChild("HasBuso") and (tick() - LastBusoTry) >= Config.BusoRetryCooldown then
+        LastBusoTry = tick()
+        task.spawn(function()
+            pcall(function()
+                local comm = getCommF()
+                if comm then comm:InvokeServer("Buso") end
+            end)
+        end)
+    end
+
+    local tool = equipBestTool()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    pcall(function()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        local net = modules and modules:FindFirstChild("Net")
+        local enemies = Workspace:FindFirstChild("Enemies")
+        if net and mob and mob:FindFirstChild("HumanoidRootPart") then
+            local regAtk = net:FindFirstChild("RE/RegisterAttack")
+            local regHit = net:FindFirstChild("RE/RegisterHit")
+            if regAtk and regHit then
+                local targets = {}
+                if enemies then
+                    for _, enemy in ipairs(enemies:GetChildren()) do
+                        local er = enemy:FindFirstChild("HumanoidRootPart")
+                        local eh = enemy:FindFirstChildOfClass("Humanoid")
+                        if er and eh and eh.Health > 0 and (er.Position - root.Position).Magnitude <= 65 then
+                            table.insert(targets, {enemy, er})
+                        end
+                    end
+                end
+                if #targets == 0 then
+                    table.insert(targets, {mob, mob.HumanoidRootPart})
+                end
+                regAtk:FireServer(0)
+                regHit:FireServer(mob.HumanoidRootPart, targets)
+            end
+        end
+    end)
+
+    pcall(function()
+        local cfScript = LocalPlayer:FindFirstChild("PlayerScripts") and LocalPlayer.PlayerScripts:FindFirstChild("CombatFramework")
+        if cfScript and debug and debug.getupvalues then
+            local cf = require(cfScript)
+            local upvals = debug.getupvalues(cf)
+            if upvals and upvals[2] and upvals[2].activeController then
+                local ctrl = upvals[2].activeController
+                ctrl.timeToNextAttack = 0
+                ctrl.hitboxMagnitude = 60
+                ctrl:attack()
+            end
+        end
+    end)
+
+    -- Рандомизированная координата клика VirtualUser (против детекта кликера в один пиксель)
+    pcall(function()
+        VirtualUser:CaptureController()
+        local camCF = (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame) or CFrame.new()
+        local cx, cy = math.random(540, 660), math.random(240, 320)
+        VirtualUser:Button1Down(Vector2.new(cx, cy), camCF)
+        VirtualUser:Button1Up(Vector2.new(cx, cy), camCF)
+    end)
+end
+
+-- Единый поток атаки с человеческим джиттером (0.11 - 0.15 сек) без дублирования из главного цикла
+task.spawn(function()
+    while isRunActive() do
+        local jitterWait = Config.AttackMinDelay + (math.random(0, 40) / 1000)
+        task.wait(jitterWait)
+        if isRunActive() and Env.OllieV8_Enabled and not GroundedAtNPC and not IsHealingState and ActiveCombatMob then
+            pcall(function()
+                local mh = ActiveCombatMob:FindFirstChildOfClass("Humanoid")
+                local mr = ActiveCombatMob:FindFirstChild("HumanoidRootPart")
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if mh and mr and myRoot and mh.Health > 0 and (mr.Position - myRoot.Position).Magnitude <= 50 then
+                    executeAttack(ActiveCombatMob)
+                end
+            end)
+        end
+    end
+end)
+
+-- ============================================================================
+-- 7. АВТО-СТАТЫ, АВТО-СТИЛЬ BLACK LEG И БЕЗОПАСНЫЙ КУЛДАУН РОЛЛА ФРУКТОВ
+-- ============================================================================
+local LastFruitRollAttempt = 0
+local HasBoughtBlackLeg = false
+
+task.spawn(function()
+    while isRunActive() and task.wait(4.5) do
+        if isRunActive() and Env.OllieV8_Enabled then
+            local comm = getCommF()
+            if comm then
+                if Config.AutoStats then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local pts = d and d:FindFirstChild("Points")
+                        if pts and pts.Value > 0 then
+                            local spend = math.min(pts.Value, 30)
+                            local meleePts = math.ceil(spend * 0.65)
+                            local defPts = math.max(1, spend - meleePts)
+                            comm:InvokeServer("AddPoint", "Melee", meleePts)
+                            comm:InvokeServer("AddPoint", "Defense", defPts)
+                        end
+                    end)
+                end
+
+                -- Авто-покупка Black Leg (Dark Step) за 150k Beli — сильно ускоряет зачистку пачек мобов
+                if Config.AutoBuyBlackLeg and not HasBoughtBlackLeg then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local beli = d and d:FindFirstChild("Beli")
+                        local bp = LocalPlayer:FindFirstChild("Backpack")
+                        local ch = LocalPlayer.Character
+                        if (bp and bp:FindFirstChild("Black Leg")) or (ch and ch:FindFirstChild("Black Leg")) then
+                            HasBoughtBlackLeg = true
+                        elseif beli and beli.Value >= 165000 then
+                            comm:InvokeServer("BuyBlackLeg")
+                            HasBoughtBlackLeg = true
+                        end
+                    end)
+                end
+
+                -- ЗАЩИТА ОТ ACCOUNT LOCKED: никакого спама Cousin каждые 4 секунды!
+                if Config.AutoRollFruit and (tick() - LastFruitRollAttempt) >= Config.FruitRollCooldown then
+                    LastFruitRollAttempt = tick()
+                    pcall(function() comm:InvokeServer("Cousin", "Buy") end)
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================================
+-- 8. ГЛАВНЫЙ ЦИКЛ АВТОФАРМА (ТОЧНАЯ БАЗА V6.1 + ФИКС КЛЮЧА QName_QNum + СПАВНЫ)
+-- ============================================================================
+local CurrentTrackedQuestKey = nil
+local ForceFarmExpireTime = 0
+local QuestTriesAtNPC = 0
+local PatrolIndex = 1
+local LastPatrolSwitch = 0
+local FarmCompletedNotified = false
+
+task.spawn(function()
+    while isRunActive() and task.wait(Config.LoopInterval) do
+        if not isRunActive() then break end
+
+        if not Env.OllieV8_Enabled then
+            DesiredGoalCFrame = nil
+            GroundedAtNPC = false
+            ActiveCombatMob = nil
+        else
+            pcall(function()
+                if ensureTeam() then
+                    local char = LocalPlayer.Character
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+                    if not char or not root or not hum or hum.Health <= 0 then
+                        logStatus("Ожидание спавна персонажа...")
+                        DesiredGoalCFrame = nil
+                        GroundedAtNPC = false
+                        IsHealingState = false
+                        SafeHealCFrame = nil
+                        ActiveCombatMob = nil
+                    else
+                        clearBlockingDialogue()
+
+                        local qData, myLvl = getQuestByLevel()
+
+                        -- Проверка достижения целевого уровня Первого Моря (700)
+                        if myLvl >= Config.TargetMaxLevel then
+                            DesiredGoalCFrame = nil
+                            GroundedAtNPC = false
+                            ActiveCombatMob = nil
+                            Env.OllieV8_Enabled = false
+                            logStatus("ФАРМ ОКОНЧЕН — ДОСТИГНУТ 700 УРОВЕНЬ!", myLvl, "COMPLETED")
+                            if not FarmCompletedNotified then
+                                FarmCompletedNotified = true
+                                pcall(function()
+                                    StarterGui:SetCore("SendNotification", {
+                                        Title = "OLLIE ENGINE V8",
+                                        Text = "ФАРМ ОКОНЧЕН — ВСЕ ПОСТАВЛЕННЫЕ ЦЕЛИ ВЫПОЛНЕНЫ!",
+                                        Duration = 10
+                                    })
+                                end)
+                            end
+                            return
+                        end
+
+                        -- Составной ключ квеста (чтобы при апе 14->15, 39->40, 174->175 старый квест #1 гарантированно сбрасывался!)
+                        local expectedQuestKey = qData.QName .. "_" .. tostring(qData.QNum)
+
+                        -- === ПРОВЕРКА ЗДОРОВЬЯ (SAFE MODE ОТ СМЕРТЕЙ ПО КРУГУ) ===
+                        local hpRatio = hum.Health / math.max(hum.MaxHealth, 1)
+                        if Config.SafeModeEnabled then
+                            if hpRatio < Config.LowHpThreshold and not IsHealingState then
+                                IsHealingState = true
+                                GroundedAtNPC = false
+                                ActiveCombatMob = nil
+                                SafeHealCFrame = CFrame.new(root.Position.X, math.max(root.Position.Y + Config.SafeSkyOffset, 250), root.Position.Z)
+                            elseif IsHealingState and hpRatio >= Config.RecoverHpThreshold then
+                                IsHealingState = false
+                                SafeHealCFrame = nil
+                            end
+                        else
+                            IsHealingState = false
+                        end
+
+                        if IsHealingState and SafeHealCFrame then
+                            GroundedAtNPC = false
+                            ActiveCombatMob = nil
+                            DesiredGoalCFrame = SafeHealCFrame
+                            logStatus(string.format("ОТХИЛ В НЕБЕ [HP: %d%% / %d%%]", math.floor(hpRatio * 100), math.floor(Config.RecoverHpThreshold * 100)), myLvl, expectedQuestKey)
+                        else
+                            -- Простая и надежная проверка видимости Quest GUI (как в рабочем V6.1)
+                            local guiQuestActive = isQuestGuiVisible()
+
+                            -- Если сменился диапазон уровней (или номер под-квеста QNum 1 -> 2) — сбрасываем старый квест
+                            if guiQuestActive and CurrentTrackedQuestKey and CurrentTrackedQuestKey ~= expectedQuestKey then
+                                local comm = getCommF()
+                                if comm then
+                                    pcall(function() comm:InvokeServer("AbandonQuest") end)
+                                    CurrentTrackedQuestKey = nil
+                                    ForceFarmExpireTime = 0
+                                    task.wait(0.45)
+                                    guiQuestActive = isQuestGuiVisible()
+                                end
+                            end
+
+                            local hasActiveQuest = guiQuestActive or (tick() < ForceFarmExpireTime)
+
+                            if not hasActiveQuest then
+                                -- ШАГ 1: ЛЕТИМ К ЖИВОЙ МОДЕЛИ NPC И БЕРЕМ КВЕСТ С ЗЕМЛИ (ТОЧНАЯ ЛОГИКА V6.1)
+                                ActiveCombatMob = nil
+                                local npcTargetCF = getLiveNPCCFrame(qData)
+                                tryFastPortalTransition(root, npcTargetCF.Position)
+
+                                local npcDist = (root.Position - npcTargetCF.Position).Magnitude
+
+                                if npcDist > 7 then
+                                    GroundedAtNPC = false
+                                    DesiredGoalCFrame = npcTargetCF
+                                    logStatus("Летим к NPC " .. tostring(qData.NPC) .. " (" .. tostring(math.floor(npcDist)) .. "м)", myLvl, expectedQuestKey)
+                                    requestStreamThrottled(npcTargetCF.Position)
+                                else
+                                    requestStreamThrottled(npcTargetCF.Position)
+                                    GroundedAtNPC = true
+                                    DesiredGoalCFrame = nil
+                                    root.CFrame = npcTargetCF
+                                    hum:MoveTo(npcTargetCF.Position)
+                                    task.wait(0.4)
+
+                                    local comm = getCommF()
+                                    local serverReply = nil
+                                    if comm then
+                                        pcall(function()
+                                            serverReply = comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
+                                        end)
+                                    end
+
+                                    -- Сразу возвращаем полетное удержание, чтобы не падать с уступа Sky Adventurer
+                                    GroundedAtNPC = false
+                                    DesiredGoalCFrame = npcTargetCF
+
+                                    QuestTriesAtNPC = QuestTriesAtNPC + 1
+                                    CurrentTrackedQuestKey = expectedQuestKey
+                                    logStatus("Взятие квеста #" .. tostring(QuestTriesAtNPC) .. " (Ответ: " .. tostring(serverReply) .. ")", myLvl, expectedQuestKey)
+                                    task.wait(0.55)
+
+                                    if isQuestGuiVisible() or QuestTriesAtNPC >= 3 then
+                                        if not isQuestGuiVisible() then
+                                            ForceFarmExpireTime = tick() + 30
+                                        end
+                                        QuestTriesAtNPC = 0
+                                    end
+                                end
+                            else
+                                -- ШАГ 2: КВЕСТ АКТИВЕН -> ИЩЕМ И УНИЧТОЖАЕМ МОБОВ С БЕЗОПАСНОЙ ВЫСОТЫ
+                                GroundedAtNPC = false
+                                QuestTriesAtNPC = 0
+                                CurrentTrackedQuestKey = expectedQuestKey
+
+                                local mob = findTargetMob(qData)
+                                if mob and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChildOfClass("Humanoid") then
+                                    ActiveCombatMob = mob
+                                    local mPos = mob.HumanoidRootPart.Position
+                                    tryFastPortalTransition(root, mPos)
+
+                                    local distToMob = (root.Position - mPos).Magnitude
+                                    logStatus("Бьем: " .. mob.Name .. " [HP: " .. tostring(math.floor(mob.Humanoid.Health)) .. "]", myLvl, expectedQuestKey)
+
+                                    local attackPos = mPos + Vector3.new(0, Config.AttackHeight, Config.AttackBackOffset)
+                                    DesiredGoalCFrame = CFrame.new(attackPos, mPos)
+
+                                    if distToMob <= 50 then
+                                        pullMobsTogether(qData.Mob, mPos)
+                                    end
+                                else
+                                    ActiveCombatMob = nil
+                                    local waypoints = getMobSpawnWaypoints(qData)
+                                    if #waypoints > 1 and (tick() - LastPatrolSwitch) >= Config.SpawnPatrolInterval then
+                                        LastPatrolSwitch = tick()
+                                        PatrolIndex = (PatrolIndex % #waypoints) + 1
+                                    end
+                                    if PatrolIndex > #waypoints then PatrolIndex = 1 end
+
+                                    local targetSpawnCF = waypoints[PatrolIndex]
+                                    tryFastPortalTransition(root, targetSpawnCF.Position)
+                                    requestStreamThrottled(targetSpawnCF.Position)
+
+                                    local waitDist = (root.Position - targetSpawnCF.Position).Magnitude
+                                    DesiredGoalCFrame = targetSpawnCF
+                                    logStatus(
+                                        string.format("Ждем/летим к спавну %s (%dм) [%d/%d]", qData.Mob, math.floor(waitDist), PatrolIndex, #waypoints),
+                                        myLvl,
+                                        expectedQuestKey
+                                    )
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
