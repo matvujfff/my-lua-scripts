@@ -1,9 +1,9 @@
--- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8.5 - FULL RELEASE (ANTICHEAT SAFE) ]] --
+-- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8.6 - "HUMAN-LIKE" INTERACTION ]] --
 -- Language: Lua 5.1 / Luau | Runtime: Delta / Project Real / Windows & Android Executors
--- Архитектура V8.5:
---   1. ИСПРАВЛЕН БАГ С НЕБОМ: Отключен обход преград в момент взятия квеста.
---   2. ЗАЩИТА ОТ БАНА: Полет переведен с CFrame на BodyVelocity (защита от серверного отката).
---   3. ЗАЩИТА ОТ ACCOUNT LOCKED: Добавлены задержки при вызове InvokeServer и ограничена скорость.
+-- Архитектура V8.6:
+--   1. ГЛОБАЛЬНЫЙ ФИКС: Скрипт приземляется перед NPC и имитирует нажатие клавиши взаимодействия.
+--   2. Безопасный полёт: BodyVelocity используется только для перемещения и отключается у цели.
+--   3. Плавное приземление: Убраны резкие телепортации, персонаж "падает" на землю.
 --   4. Фарм до 3000 уровня (Sea 1, Sea 2, Sea 3).
 
 local Players = game:GetService("Players")
@@ -15,6 +15,7 @@ local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 local StarterGui = game:GetService("StarterGui")
 local GuiService = game:GetService("GuiService")
+local UserInputService = game:GetService("UserInputService") -- Для имитации нажатий
 
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do
@@ -25,19 +26,19 @@ end
 local MAX_LEVEL = 3000
 
 local Env = (getgenv and getgenv()) or _G
-Env.OllieV85_Running = false
-Env.OllieV85_Enabled = false
+Env.OllieV86_Running = false
+Env.OllieV86_Enabled = false
 
-local MyRunId = (tonumber(Env.OllieV85_RunId) or 0) + 1
-Env.OllieV85_RunId = MyRunId
-Env.OllieV85_Running = true
-Env.OllieV85_Enabled = true
+local MyRunId = (tonumber(Env.OllieV86_RunId) or 0) + 1
+Env.OllieV86_RunId = MyRunId
+Env.OllieV86_Running = true
+Env.OllieV86_Enabled = true
 
-if type(Env.OllieV85_RestoreCollisions) == "function" then
-    pcall(Env.OllieV85_RestoreCollisions)
+if type(Env.OllieV86_RestoreCollisions) == "function" then
+    pcall(Env.OllieV86_RestoreCollisions)
 end
 
-for _, connListKey in ipairs({"OllieV85_Connections"}) do
+for _, connListKey in ipairs({"OllieV86_Connections"}) do
     if type(Env[connListKey]) == "table" then
         for _, conn in ipairs(Env[connListKey]) do
             pcall(function()
@@ -46,10 +47,10 @@ for _, connListKey in ipairs({"OllieV85_Connections"}) do
         end
     end
 end
-Env.OllieV85_Connections = {}
+Env.OllieV86_Connections = {}
 
 local function isCurrentRunActive()
-    return Env.OllieV85_Running == true and Env.OllieV85_RunId == MyRunId
+    return Env.OllieV86_Running == true and Env.OllieV86_RunId == MyRunId
 end
 
 local Config = {
@@ -58,11 +59,11 @@ local Config = {
     AutoStats = true,
     AutoRollFruit = false,
     BringMobs = true,
-    FlightSpeed = 210,          -- Безопасная скорость для античита
+    FlightSpeed = 180,          -- Слегка снижена для стабильности
     LoopInterval = 0.12,
     FastAttackInterval = 0.08,
     WeaponType = "Melee",
-    AttackHeight = 16.5,
+    AttackHeight = 12.0,        -- Чуть ниже, чтобы не висеть слишком высоко
     AttackBackOffset = 2.0,
     MobHitboxSize = 55,
     SafeModeEnabled = true,
@@ -93,7 +94,7 @@ local FSM = {
     ActiveCombatMob = nil,
     LastBusoTry = 0
 }
-Env.OllieV85_FSM = FSM
+Env.OllieV86_FSM = FSM
 
 local function sendScreenNotification(title, text, duration)
     pcall(function()
@@ -101,15 +102,15 @@ local function sendScreenNotification(title, text, duration)
     end)
 end
 
-sendScreenNotification("OLLIE ENGINE V8.5", string.format("Запуск V8.5 [Run #%d]: Античит-безопасный полет + Фикс неба!", MyRunId), 5)
+sendScreenNotification("OLLIE ENGINE V8.6", string.format("Запуск V8.6 [Run #%d]: 'Человеческое' взаимодействие с NPC!", MyRunId), 5)
 
 local restoreModifiedCollisions = function() end
 local updateHudCompletionState = function() end
 
 local function stopAllBackgroundTasksOnCompletion()
     FSM.Completed = true
-    Env.OllieV85_Enabled = false
-    Env.OllieV85_Running = false
+    Env.OllieV86_Enabled = false
+    Env.OllieV86_Running = false
     FSM.DesiredGoalCFrame = nil
     FSM.GroundedAtNPC = false
     FSM.ActiveCombatMob = nil
@@ -117,11 +118,11 @@ local function stopAllBackgroundTasksOnCompletion()
     FSM.SafeHealCFrame = nil
     pcall(restoreModifiedCollisions)
 
-    if type(Env.OllieV85_Connections) == "table" then
-        for _, conn in ipairs(Env.OllieV85_Connections) do
+    if type(Env.OllieV86_Connections) == "table" then
+        for _, conn in ipairs(Env.OllieV86_Connections) do
             pcall(function() if conn and conn.Connected then conn:Disconnect() end end)
         end
-        Env.OllieV85_Connections = {}
+        Env.OllieV86_Connections = {}
     end
 end
 
@@ -132,13 +133,13 @@ local function buildHUD(onHopClicked)
     local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
     if not pGui or not isCurrentRunActive() then return end
 
-    for _, oldName in ipairs({"OllieHudV8_3", "OllieHudV8_5"}) do
+    for _, oldName in ipairs({"OllieHudV8_3", "OllieHudV8_5", "OllieHudV8_6"}) do
         local old = pGui:FindFirstChild(oldName)
         if old then old:Destroy() end
     end
 
     local screen = Instance.new("ScreenGui")
-    screen.Name = "OllieHudV8_5"
+    screen.Name = "OllieHudV8_6"
     screen.ResetOnSpawn = false
     screen.DisplayOrder = 999999
     screen.IgnoreGuiInset = true
@@ -156,7 +157,7 @@ local function buildHUD(onHopClicked)
     header.Size = UDim2.new(1, -12, 0, 22)
     header.Position = UDim2.new(0, 6, 0, 4)
     header.BackgroundTransparency = 1
-    header.Text = string.format("OLLIE BF V8.5 [TARGET: %d]", MAX_LEVEL)
+    header.Text = string.format("OLLIE BF V8.6 [TARGET: %d]", MAX_LEVEL)
     header.TextColor3 = Color3.fromRGB(0, 255, 136)
     header.Font = Enum.Font.SourceSansBold
     header.TextSize = 15
@@ -214,7 +215,7 @@ local function buildHUD(onHopClicked)
 
     updateHudCompletionState = function(finalLvl)
         pcall(function()
-            header.Text = string.format("OLLIE BF V8.5 [COMPLETED: %d]", tonumber(finalLvl) or MAX_LEVEL)
+            header.Text = string.format("OLLIE BF V8.6 [COMPLETED: %d]", tonumber(finalLvl) or MAX_LEVEL)
             header.TextColor3 = Color3.fromRGB(255, 215, 0)
             main.BorderColor3 = Color3.fromRGB(255, 215, 0)
             btnToggle.Text = "ЗАВЕРШЕНО"
@@ -228,11 +229,11 @@ local function buildHUD(onHopClicked)
     local function handleToggle()
         if not isCurrentRunActive() or toggleLock or FSM.Completed then return end
         toggleLock = true
-        Env.OllieV85_Enabled = not Env.OllieV85_Enabled
-        if Env.OllieV85_Enabled then
+        Env.OllieV86_Enabled = not Env.OllieV86_Enabled
+        if Env.OllieV86_Enabled then
             btnToggle.Text = "ФАРМ: ВКЛ"
             btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
-            header.Text = string.format("OLLIE BF V8.5 [TARGET: %d]", MAX_LEVEL)
+            header.Text = string.format("OLLIE BF V8.6 [TARGET: %d]", MAX_LEVEL)
             header.TextColor3 = Color3.fromRGB(0, 255, 136)
             main.BorderColor3 = Color3.fromRGB(0, 255, 136)
         else
@@ -243,7 +244,7 @@ local function buildHUD(onHopClicked)
             restoreModifiedCollisions()
             btnToggle.Text = "ФАРМ: ПАУЗА"
             btnToggle.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
-            header.Text = "OLLIE BF V8.5 [PAUSED]"
+            header.Text = "OLLIE BF V8.6 [PAUSED]"
             header.TextColor3 = Color3.fromRGB(255, 80, 80)
             main.BorderColor3 = Color3.fromRGB(255, 80, 80)
             status.Text = "Статус: На паузе (коллизии восстановлены)"
@@ -251,7 +252,7 @@ local function buildHUD(onHopClicked)
         task.delay(0.25, function() toggleLock = false end)
     end
 
-    table.insert(Env.OllieV85_Connections, btnToggle.Activated:Connect(handleToggle))
+    table.insert(Env.OllieV86_Connections, btnToggle.Activated:Connect(handleToggle))
 
     local lastHopClick = 0
     local function triggerHop()
@@ -260,11 +261,11 @@ local function buildHUD(onHopClicked)
         if onHopClicked then task.spawn(onHopClicked) end
     end
 
-    table.insert(Env.OllieV85_Connections, btnHop.Activated:Connect(triggerHop))
+    table.insert(Env.OllieV86_Connections, btnHop.Activated:Connect(triggerHop))
 end
 
 local function setFSMState(newState, statusMsg, lvl, qKey)
-    if Env.OllieV85_RunId ~= MyRunId then return end
+    if Env.OllieV86_RunId ~= MyRunId then return end
     FSM.State = newState
     pcall(function()
         if StatusLabelRef and statusMsg then StatusLabelRef.Text = "Статус: " .. tostring(statusMsg) end
@@ -276,7 +277,7 @@ end
 
 local HopFSM = { Status = "IDLE", OriginJobId = "", FailReason = "" }
 
-table.insert(Env.OllieV85_Connections, TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+table.insert(Env.OllieV86_Connections, TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
     if not isCurrentRunActive() then return end
     if player == LocalPlayer and (HopFSM.Status == "IN_FLIGHT" or HopFSM.Status == "INDETERMINATE") then
         HopFSM.Status = "FAILED"
@@ -285,7 +286,7 @@ table.insert(Env.OllieV85_Connections, TeleportService.TeleportInitFailed:Connec
 end))
 
 pcall(function()
-    table.insert(Env.OllieV85_Connections, LocalPlayer.OnTeleport:Connect(function(teleportState)
+    table.insert(Env.OllieV86_Connections, LocalPlayer.OnTeleport:Connect(function(teleportState)
         if not isCurrentRunActive() then return end
         if HopFSM.Status == "IN_FLIGHT" or HopFSM.Status == "INDETERMINATE" then
             if teleportState == Enum.TeleportState.Failed then
@@ -297,7 +298,7 @@ pcall(function()
 end)
 
 pcall(function()
-    table.insert(Env.OllieV85_Connections, GuiService.ErrorMessageChanged:Connect(function(msg)
+    table.insert(Env.OllieV86_Connections, GuiService.ErrorMessageChanged:Connect(function(msg)
         if not isCurrentRunActive() then return end
         if (HopFSM.Status == "IN_FLIGHT" or HopFSM.Status == "INDETERMINATE") and type(msg) == "string" and #msg > 0 then
             local lower = string.lower(msg)
@@ -403,7 +404,7 @@ end
 
 buildHUD(performServerHop)
 
-table.insert(Env.OllieV85_Connections, LocalPlayer.Idled:Connect(function()
+table.insert(Env.OllieV86_Connections, LocalPlayer.Idled:Connect(function()
     if not isCurrentRunActive() or FSM.Completed then return end
     pcall(function()
         VirtualUser:CaptureController()
@@ -421,9 +422,8 @@ local function mobNameMatches(enemyName, mobName)
     return c == "" or c == " " or c == "["
 end
 
--- ПОЛНАЯ ТАБЛИЦА КВЕСТОВ (SEA 1, 2, 3)
+-- (Таблица квестов QuestsAll осталась без изменений, она корректна)
 local QuestsAll = {
-    -- SEA 1
     {Min = 1,   Max = 9,             Mob = "Bandit",              NPC = "Bandit Quest Giver",    QName = "BanditQuest1",   QNum = 1, QPos = CFrame.new(1059.37, 16.36, 1549.25),   MPos = CFrame.new(1145.00, 17.00, 1634.00)},
     {Min = 10,  Max = 14,            Mob = "Monkey",              NPC = "Adventurer",            QName = "JungleQuest",    QNum = 1, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1448.51, 67.85, 11.46)},
     {Min = 15,  Max = 29,            Mob = "Gorilla",             NPC = "Adventurer",            QName = "JungleQuest",    QNum = 2, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1129.88, 40.46, -525.42)},
@@ -450,8 +450,6 @@ local QuestsAll = {
     {Min = 550, Max = 624,           Mob = "Royal Soldier",       NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 2, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7836.75, 5645.66, -1790.62)},
     {Min = 625, Max = 649,           Mob = "Galley Pirate",       NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 1, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5551.02, 78.90, 3930.41)},
     {Min = 650, Max = 699,           Mob = "Galley Captain",      NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 2, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5649.95, 38.53, 4936.26)},
-
-    -- SEA 2
     {Min = 700, Max = 724,           Mob = "Raider",              NPC = "Citizen",               QName = "Area1Quest",     QNum = 1, QPos = CFrame.new(-245.23, 73.38, 2754.09),   MPos = CFrame.new(-426.96, 40.34, 2553.40)},
     {Min = 725, Max = 749,           Mob = "Mercenary",           NPC = "Citizen",               QName = "Area1Quest",     QNum = 2, QPos = CFrame.new(-245.23, 73.38, 2754.09),   MPos = CFrame.new(-664.10, 71.32, 2680.90)},
     {Min = 750, Max = 774,           Mob = "Swan Pirate",         NPC = "Customer",              QName = "Area2Quest",     QNum = 1, QPos = CFrame.new(638.38, 71.74, 916.00),     MPos = CFrame.new(1032.38, 71.74, 928.00)},
@@ -479,8 +477,6 @@ local QuestsAll = {
     {Min = 1425, Max = 1449,         Mob = "Fishman Raider",      NPC = "Fishman",               QName = "FishmanQuest2",  QNum = 1, QPos = CFrame.new(61120.00, 18.00, 1560.00), MPos = CFrame.new(61120.00, 18.00, 1560.00)},
     {Min = 1450, Max = 1474,         Mob = "Fishman Captain",     NPC = "Fishman",               QName = "FishmanQuest2",  QNum = 2, QPos = CFrame.new(61120.00, 18.00, 1560.00), MPos = CFrame.new(61120.00, 18.00, 1560.00)},
     {Min = 1475, Max = 1499,         Mob = "Forest Pirate",       NPC = "Pirate",                QName = "ForestQuest",    QNum = 1, QPos = CFrame.new(-300.00, 100.00, 4000.00), MPos = CFrame.new(-300.00, 100.00, 4000.00)},
-
-    -- SEA 3 (Базовые локейшены)
     {Min = 1500, Max = 1524,         Mob = "Pirate Millionaire",  NPC = "Pirate",                QName = "PiratePortQuest", QNum = 1, QPos = CFrame.new(-286.00, 7.00, 4312.00),  MPos = CFrame.new(-286.00, 7.00, 4312.00)},
     {Min = 1525, Max = 1549,         Mob = "Pistol Billionaire",  NPC = "Pirate",                QName = "PiratePortQuest", QNum = 2, QPos = CFrame.new(-286.00, 7.00, 4312.00),  MPos = CFrame.new(-286.00, 7.00, 4312.00)},
     {Min = 1550, Max = 1574,         Mob = "Dragon Crew Warrior", NPC = "Dragon Crew",           QName = "DragonQuest",    QNum = 1, QPos = CFrame.new(-301.00, 81.00, 2938.00),  MPos = CFrame.new(-301.00, 81.00, 2938.00)},
@@ -564,7 +560,7 @@ local function getVisibleQuestFrame()
     if not pGui then return nil end
 
     for _, gui in ipairs(pGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV8_5" then
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV8_6" then
             local directQuest = gui:FindFirstChild("Quest")
             if directQuest and directQuest:IsA("GuiObject") and isGuiChainVisible(directQuest) then
                 CachedQuestFrame = directQuest
@@ -716,7 +712,8 @@ local function evaluatePlayerProgressAndQuest()
     return QuestsAll[#QuestsAll], lvl, "OK"
 end
 
-local function getLiveNPCCFrame(qData)
+-- ИСПРАВЛЕНО: Теперь возвращаем точку на ЗЕМЛЕ рядом с NPC
+local function getGroundNPCCFrame(qData)
     local npcFolders = {
         Workspace:FindFirstChild("NPCs"),
         Workspace:FindFirstChild("_WorldOrigin") and Workspace._WorldOrigin:FindFirstChild("NPCs")
@@ -728,7 +725,8 @@ local function getLiveNPCCFrame(qData)
                 if exact then
                     local r = exact:FindFirstChild("HumanoidRootPart") or exact:FindFirstChild("Head") or exact.PrimaryPart
                     if r and (r.Position - qData.QPos.Position).Magnitude <= 250 then
-                        return r.CFrame * CFrame.new(0, 2, -4)
+                        -- Встаем на землю перед NPC (смещение по Y вниз)
+                        return CFrame.new(r.Position.X, r.Position.Y - 3, r.Position.Z - 4)
                     end
                 end
             end
@@ -738,13 +736,13 @@ local function getLiveNPCCFrame(qData)
                 local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
                 if r then
                     local d = (r.Position - qData.QPos.Position).Magnitude
-                    if d < bestDist then bestDist = d bestCF = r.CFrame * CFrame.new(0, 2, -4) end
+                    if d < bestDist then bestDist = d bestCF = CFrame.new(r.Position.X, r.Position.Y - 3, r.Position.Z - 4) end
                 end
             end
             if bestCF then return bestCF end
         end
     end
-    return qData.QPos * CFrame.new(0, 2, -4)
+    return CFrame.new(qData.QPos.X, qData.QPos.Y - 3, qData.QPos.Z - 4)
 end
 
 local WaypointCache = { QuestKey = "", UpdatedAt = 0, Points = {} }
@@ -797,7 +795,7 @@ local function trackCharacterParts(char)
     for _, obj in ipairs(char:GetDescendants()) do
         if obj:IsA("BasePart") then table.insert(CachedCharParts, obj) end
     end
-    table.insert(Env.OllieV85_Connections, char.DescendantAdded:Connect(function(obj)
+    table.insert(Env.OllieV86_Connections, char.DescendantAdded:Connect(function(obj)
         if isCurrentRunActive() and obj:IsA("BasePart") then table.insert(CachedCharParts, obj) end
     end))
 end
@@ -812,29 +810,11 @@ restoreModifiedCollisions = function()
     local bv = root and root:FindFirstChild("OllieBV")
     if bv then pcall(function() bv:Destroy() end) end
 end
-Env.OllieV85_RestoreCollisions = restoreModifiedCollisions
+Env.OllieV86_RestoreCollisions = restoreModifiedCollisions
 
 if LocalPlayer.Character then trackCharacterParts(LocalPlayer.Character) end
 
-local NavBypass = {
-    Phase = "NONE", PhaseStartedAt = 0, SafeAltitudeY = 0, ClimbAnchorX = 0, ClimbAnchorZ = 0,
-    LastCheckClock = 0, LastSamplePos = nil, LastGoalDist = math.huge, StuckTicks = 0, AttemptsUsed = 0, TrackedGoalPos = nil
-}
-
-local function resetNavBypass(keepAttemptCount)
-    NavBypass.Phase = "NONE"
-    NavBypass.PhaseStartedAt = 0
-    NavBypass.LastCheckClock = os.clock()
-    NavBypass.LastSamplePos = nil
-    NavBypass.LastGoalDist = math.huge
-    NavBypass.StuckTicks = 0
-    if not keepAttemptCount then
-        NavBypass.AttemptsUsed = 0
-        NavBypass.TrackedGoalPos = nil
-    end
-end
-
-table.insert(Env.OllieV85_Connections, LocalPlayer.CharacterAdded:Connect(function(newChar)
+table.insert(Env.OllieV86_Connections, LocalPlayer.CharacterAdded:Connect(function(newChar)
     if not isCurrentRunActive() or FSM.Completed then return end
     ModifiedCollisionParts = {}
     trackCharacterParts(newChar)
@@ -845,14 +825,13 @@ table.insert(Env.OllieV85_Connections, LocalPlayer.CharacterAdded:Connect(functi
     FSM.ActiveCombatMob = nil
     CachedQuestFrame = nil
     CachedDialogueFrame = nil
-    resetNavBypass(false)
 end))
 
-table.insert(Env.OllieV85_Connections, RunService.Stepped:Connect(function()
+table.insert(Env.OllieV86_Connections, RunService.Stepped:Connect(function()
     if not isCurrentRunActive() then return end
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not Env.OllieV85_Enabled or FSM.Completed or FSM.GroundedAtNPC or not char or not hum or hum.Health <= 0 then
+    if not Env.OllieV86_Enabled or FSM.Completed or FSM.GroundedAtNPC or not char or not hum or hum.Health <= 0 then
         restoreModifiedCollisions()
         return
     end
@@ -866,8 +845,8 @@ table.insert(Env.OllieV85_Connections, RunService.Stepped:Connect(function()
     end
 end))
 
--- УЛУЧШЕННЫЙ ФИЗИЧЕСКИЙ ПОЛЕТ
-table.insert(Env.OllieV85_Connections, RunService.Heartbeat:Connect(function(dt)
+-- УПРОЩЕННЫЙ И НАДЕЖНЫЙ ПОЛЕТ
+table.insert(Env.OllieV86_Connections, RunService.Heartbeat:Connect(function(dt)
     if not isCurrentRunActive() then return end
     local char = LocalPlayer.Character
     if not char then return end
@@ -875,10 +854,23 @@ table.insert(Env.OllieV85_Connections, RunService.Heartbeat:Connect(function(dt)
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not root or not hum then return end
 
-    -- Отключаем полет при взятии квеста (фикс неба)
-    if not Env.OllieV85_Enabled or FSM.Completed or hum.Health <= 0 or FSM.GroundedAtNPC or FSM.State == "TAKE_QUEST" then
+    -- Отключаем полет, если мы "на земле" у NPC или в процессе диалога
+    if not Env.OllieV86_Enabled or FSM.Completed or hum.Health <= 0 or FSM.GroundedAtNPC or FSM.State == "TAKE_QUEST" then
         restoreModifiedCollisions()
-        resetNavBypass(false)
+        return
+    end
+
+    local goalCF = FSM.DesiredGoalCFrame
+    if not goalCF then return end
+
+    local curPos = root.Position
+    local finalDstPos = goalCF.Position
+    local totalDist = (finalDstPos - curPos).Magnitude
+
+    -- Если мы близко к цели, отключаем полет и позволяем гравитации опустить нас
+    if totalDist <= 8.0 then
+        local bv = root:FindFirstChild("OllieBV")
+        if bv then bv:Destroy() end
         return
     end
 
@@ -890,38 +882,16 @@ table.insert(Env.OllieV85_Connections, RunService.Heartbeat:Connect(function(dt)
         bv.Parent = root
     end
 
-    -- Компенсация гравитации (защита от падения)
-    pcall(function()
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
-
-    local goalCF = FSM.DesiredGoalCFrame
-    if not goalCF then
-        bv.Velocity = Vector3.zero
-        resetNavBypass(false)
-        return
-    end
-
-    local curPos = root.Position
-    local finalDstPos = goalCF.Position
-    local totalDist = (finalDstPos - curPos).Magnitude
-
-    if totalDist <= 7.0 then
-        bv.Velocity = Vector3.zero
-        root.CFrame = goalCF
-        resetNavBypass(false)
-        return
-    end
-
-    -- Движение напрямую к цели (защита от застревания)
     local dir = (finalDstPos - curPos).Unit
-    local safeSpeed = math.min(Config.FlightSpeed, 210) -- Ограничение античита
+    local safeSpeed = math.min(Config.FlightSpeed, 180)
     
-    bv.Velocity = dir * safeSpeed
+    -- Добавляем вертикальную составляющую, чтобы не врезаться в текстуры на подъеме
+    local vel = dir * safeSpeed
+    vel = vel + Vector3.new(0, math.clamp((finalDstPos.Y - curPos.Y) * 2, -safeSpeed, safeSpeed), 0)
+    bv.Velocity = vel
 
-    -- Плавный поворот в сторону движения (античит)
-    if (finalDstPos - curPos).Magnitude > 1 then
+    -- Плавный поворот
+    if totalDist > 1 then
         root.CFrame = CFrame.new(curPos, Vector3.new(finalDstPos.X, curPos.Y, finalDstPos.Z))
     end
 end))
@@ -1039,7 +1009,7 @@ end
 task.spawn(function()
     while isCurrentRunActive() and not FSM.Completed and task.wait(Config.FastAttackInterval) do
         if not isCurrentRunActive() or FSM.Completed then break end
-        if Env.OllieV85_Enabled and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
+        if Env.OllieV86_Enabled and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
             pcall(function()
                 local mh = FSM.ActiveCombatMob:FindFirstChildOfClass("Humanoid")
                 local mr = FSM.ActiveCombatMob:FindFirstChild("HumanoidRootPart")
@@ -1055,7 +1025,7 @@ end)
 task.spawn(function()
     while isCurrentRunActive() and not FSM.Completed and task.wait(4) do
         if not isCurrentRunActive() or FSM.Completed then break end
-        if Env.OllieV85_Enabled then
+        if Env.OllieV86_Enabled then
             local comm = getCommF()
             if comm then
                 if Config.AutoStats then
@@ -1076,11 +1046,12 @@ task.spawn(function()
     end
 end)
 
+-- ИСПРАВЛЕННЫЙ ГЛАВНЫЙ ЦИКЛ
 task.spawn(function()
     while isCurrentRunActive() and not FSM.Completed and task.wait(Config.LoopInterval) do
         if not isCurrentRunActive() or FSM.Completed then break end
 
-        if not Env.OllieV85_Enabled then
+        if not Env.OllieV86_Enabled then
             FSM.DesiredGoalCFrame = nil
             FSM.GroundedAtNPC = false
             FSM.ActiveCombatMob = nil
@@ -1145,31 +1116,45 @@ task.spawn(function()
 
                 if not hasVerifiedQuest then
                     FSM.ActiveCombatMob = nil
-                    local npcTargetCF = getLiveNPCCFrame(qData)
-                    tryFastPortalTransition(root, npcTargetCF.Position, myLvl)
-                    local npcDist = (root.Position - npcTargetCF.Position).Magnitude
+                    local npcGroundCF = getGroundNPCCFrame(qData) -- Используем НОВУЮ функцию (на земле)
+                    tryFastPortalTransition(root, npcGroundCF.Position, myLvl)
+                    local npcDist = (root.Position - npcGroundCF.Position).Magnitude
 
                     if npcDist > 9 then
                         FSM.GroundedAtNPC = false
-                        FSM.DesiredGoalCFrame = npcTargetCF
+                        FSM.DesiredGoalCFrame = npcGroundCF
                         setFSMState("MOVE_TO_NPC", string.format("Летим к NPC (%dм)", math.floor(npcDist)), myLvl, expectedQuestKey)
-                        requestStreamThrottled(npcTargetCF.Position)
+                        requestStreamThrottled(npcGroundCF.Position)
                     else
-                        -- Фикс застревания у NPC
+                        -- МЫ ПРИЗЕМЛИЛИСЬ. ИМИТИРУЕМ ДЕЙСТВИЯ ИГРОКА.
                         FSM.GroundedAtNPC = true
                         FSM.DesiredGoalCFrame = nil
                         restoreModifiedCollisions()
                         
+                        -- Жестко ставим на землю и обнуляем скорость
                         local bv = root:FindFirstChild("OllieBV")
                         if bv then bv.Velocity = Vector3.zero end
-                        
-                        root.CFrame = npcTargetCF
-                        hum:MoveTo(npcTargetCF.Position)
-                        task.wait(0.5) -- Ждем, пока сервер прогрузит NPC
+                        root.CFrame = npcGroundCF
+                        task.wait(0.3)
 
+                        -- 1. Имитация нажатия клавиши 'E' для взаимодействия с NPC
                         local comm = getCommF()
                         if comm then
                             FSM.QuestTriesAtNPC = FSM.QuestTriesAtNPC + 1
+                            setFSMState("TAKE_QUEST", "Взаимодействуем с NPC...", myLvl, expectedQuestKey)
+                            
+                            -- Нажимаем 'E'
+                            pcall(function()
+                                VirtualUser:CaptureController()
+                                keypress(0x45) -- 'E'
+                                task.wait(0.1)
+                                keyrelease(0x45)
+                            end)
+                            
+                            -- Ждем, пока сервер откроет диалог
+                            task.wait(1.0) 
+                            
+                            -- 2. Вызываем StartQuest ТОЛЬКО после имитации нажатия
                             pcall(function() comm:InvokeServer("StartQuest", qData.QName, qData.QNum) end)
                             
                             -- Защита от Account Locked (задержка между квестами)
