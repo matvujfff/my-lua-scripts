@@ -1092,3 +1092,728 @@ table.insert(Env.OllieV8_Connections, RunService.Heartbeat:Connect(function(dt)
     if not root or not hum then return end
 
     if not Env.OllieV8_Enabled or FSM.Completed or hum.Health <= 0 or FSM.GroundedAtNPC then
+        restoreModifiedCollisions()
+        resetNavBypass(false)
+        return
+    end
+
+    local bv = root:FindFirstChild("OllieBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "OllieBV"
+        bv.MaxForce = HugeVec
+        bv.Velocity = ZeroVec
+        bv.Parent = root
+    else
+        bv.Velocity = ZeroVec
+    end
+
+    pcall(function()
+        root.AssemblyLinearVelocity = ZeroVec
+        root.AssemblyAngularVelocity = ZeroVec
+    end)
+
+    local goalCF = FSM.DesiredGoalCFrame
+    if not goalCF then
+        resetNavBypass(false)
+        return
+    end
+
+    local curPos = root.Position
+    local finalDstPos = goalCF.Position
+    local totalDist = (finalDstPos - curPos).Magnitude
+    local horizGapToGoal = Vector3.new(finalDstPos.X - curPos.X, 0, finalDstPos.Z - curPos.Z).Magnitude
+    local now = os.clock()
+
+    if not NavBypass.TrackedGoalPos or (NavBypass.TrackedGoalPos - finalDstPos).Magnitude > 25.0 then
+        resetNavBypass(false)
+        NavBypass.TrackedGoalPos = finalDstPos
+        NavBypass.LastGoalDist = totalDist
+        NavBypass.LastSamplePos = curPos
+        NavBypass.LastCheckClock = now
+    end
+
+    if totalDist <= 6.0 then
+        resetNavBypass(false)
+        root.CFrame = goalCF
+        return
+    end
+
+    if NavBypass.Phase == "BLOCKED_HALT" then
+        if (now - NavBypass.PhaseStartedAt) >= Config.BlockedHaltRecoverySec then
+            resetNavBypass(false)
+            NavBypass.TrackedGoalPos = finalDstPos
+            NavBypass.LastGoalDist = totalDist
+            NavBypass.LastSamplePos = curPos
+            NavBypass.LastCheckClock = now
+        else
+            root.CFrame = CFrame.new(curPos) * goalCF.Rotation
+            return
+        end
+    end
+
+    if NavBypass.Phase == "CLIMB" then
+        if curPos.Y >= (NavBypass.SafeAltitudeY - 6.0) then
+            NavBypass.Phase = "CRUISE_OVER"
+            NavBypass.PhaseStartedAt = now
+            NavBypass.LastCheckClock = now
+            NavBypass.LastSamplePos = curPos
+        elseif (now - NavBypass.PhaseStartedAt) >= 2.5 then
+            startNextBypassClimb(curPos, finalDstPos, now)
+        end
+
+    elseif NavBypass.Phase == "CRUISE_OVER" then
+        if horizGapToGoal <= 14.0 then
+            resetNavBypass(true)
+            NavBypass.LastGoalDist = totalDist
+            NavBypass.LastSamplePos = curPos
+            NavBypass.LastCheckClock = now
+        else
+            if (now - NavBypass.LastCheckClock) >= 0.7 then
+                local moved = NavBypass.LastSamplePos and (curPos - NavBypass.LastSamplePos).Magnitude or 999
+                if moved < 6.0 or (now - NavBypass.PhaseStartedAt) >= 6.5 then
+                    startNextBypassClimb(curPos, finalDstPos, now)
+                end
+                NavBypass.LastSamplePos = curPos
+                NavBypass.LastCheckClock = now
+            end
+        end
+
+    else
+        if totalDist > 14.0 and (now - NavBypass.LastCheckClock) >= 0.65 then
+            local distReduced = NavBypass.LastGoalDist - totalDist
+            local actualMoved = NavBypass.LastSamplePos and (curPos - NavBypass.LastSamplePos).Magnitude or 999
+
+            if distReduced < 6.0 or actualMoved < 6.0 then
+                NavBypass.StuckTicks = NavBypass.StuckTicks + 1
+                if NavBypass.StuckTicks >= 2 then
+                    startNextBypassClimb(curPos, finalDstPos, now)
+                end
+            else
+                NavBypass.StuckTicks = 0
+            end
+
+            NavBypass.LastGoalDist = totalDist
+            NavBypass.LastSamplePos = curPos
+            NavBypass.LastCheckClock = now
+        end
+    end
+
+    if NavBypass.Phase == "BLOCKED_HALT" then
+        root.CFrame = CFrame.new(curPos) * goalCF.Rotation
+        return
+    end
+
+    local stepTargetPos = finalDstPos
+    if NavBypass.Phase == "CLIMB" then
+        stepTargetPos = Vector3.new(NavBypass.ClimbAnchorX, NavBypass.SafeAltitudeY, NavBypass.ClimbAnchorZ)
+    elseif NavBypass.Phase == "CRUISE_OVER" then
+        stepTargetPos = Vector3.new(finalDstPos.X, NavBypass.SafeAltitudeY, finalDstPos.Z)
+    end
+
+    local delta = stepTargetPos - curPos
+    local distToStepTarget = delta.Magnitude
+
+    if distToStepTarget <= 0.05 then
+        root.CFrame = CFrame.new(curPos) * goalCF.Rotation
+    else
+        local step = math.min(distToStepTarget, Config.FlightSpeed * dt)
+        local nextPos = curPos + (delta.Unit * step)
+        local lookHoriz = Vector3.new(finalDstPos.X - nextPos.X, 0, finalDstPos.Z - nextPos.Z).Magnitude
+        if lookHoriz > 0.05 then
+            root.CFrame = CFrame.new(nextPos, finalDstPos)
+        else
+            root.CFrame = CFrame.new(nextPos) * goalCF.Rotation
+        end
+    end
+end))
+
+-- ============================================================================
+-- 8. БОЕВАЯ СИСТЕМА: КЭШИРОВАННЫЕ REMOTES И ЕДИНЫЙ ПОТОК АТАКИ
+-- ============================================================================
+local CachedRegAtk = nil
+local CachedRegHit = nil
+local CachedCFController = nil
+local LastCFResolveClock = 0
+
+local function getCombatRemotes()
+    if CachedRegAtk and CachedRegAtk.Parent and CachedRegHit and CachedRegHit.Parent then
+        return CachedRegAtk, CachedRegHit
+    end
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    local net = modules and modules:FindFirstChild("Net")
+    if net then
+        CachedRegAtk = net:FindFirstChild("RE/RegisterAttack")
+        CachedRegHit = net:FindFirstChild("RE/RegisterHit")
+    end
+    return CachedRegAtk, CachedRegHit
+end
+
+local function getCombatFrameworkController()
+    if CachedCFController then
+        return CachedCFController
+    end
+    if (os.clock() - LastCFResolveClock) < 5.0 then
+        return nil
+    end
+    LastCFResolveClock = os.clock()
+    pcall(function()
+        local cfScript = LocalPlayer:FindFirstChild("PlayerScripts") and LocalPlayer.PlayerScripts:FindFirstChild("CombatFramework")
+        if cfScript and debug and debug.getupvalues then
+            local cf = require(cfScript)
+            local upvals = debug.getupvalues(cf)
+            if upvals and upvals[2] and upvals[2].activeController then
+                CachedCFController = upvals[2].activeController
+            end
+        end
+    end)
+    return CachedCFController
+end
+
+local function equipBestTool()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum or hum.Health <= 0 then return nil end
+
+    local eq = char:FindFirstChildOfClass("Tool")
+    if eq and (eq.ToolTip == Config.WeaponType or eq.Name == "Combat") then
+        return eq
+    end
+
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if item:IsA("Tool") and (item.ToolTip == Config.WeaponType or item.Name == "Combat") then
+                hum:EquipTool(item)
+                return item
+            end
+        end
+        local firstTool = bp:FindFirstChildOfClass("Tool")
+        if firstTool then
+            hum:EquipTool(firstTool)
+            return firstTool
+        end
+    end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+local function findTargetMob(qData)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+
+    local bestMob = nil
+    local bestDist = math.huge
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local refPos = (myRoot and myRoot.Position) or qData.MPos.Position
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        -- Используем префиксный матчер вместо слабого string.find
+        if mobNameMatches(m.Name, qData.Mob) then
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            if mh and mr and mh.Health > 0 and mr.Position.Y > -350 then
+                local d = (mr.Position - refPos).Magnitude
+                if d < bestDist and (mr.Position - qData.MPos.Position).Magnitude <= 1600 then
+                    bestDist = d
+                    bestMob = m
+                end
+            end
+        end
+    end
+
+    return bestMob
+end
+
+local LastSimRadiusSet = 0
+local function pullMobsTogether(mobName, targetPos)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    local boxVec = Vector3.new(Config.MobHitboxSize, Config.MobHitboxSize, Config.MobHitboxSize)
+
+    if sethiddenproperty and (os.clock() - LastSimRadiusSet) >= 2.0 then
+        LastSimRadiusSet = os.clock()
+        pcall(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        end)
+    end
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        -- Используем префиксный матчер при стяжке
+        if mobNameMatches(m.Name, mobName) then
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            if mr and mh and mh.Health > 0 and (mr.Position - targetPos).Magnitude <= 260 then
+                pcall(function()
+                    if mr.CanCollide then mr.CanCollide = false end
+                    if mr.Size ~= boxVec then
+                        mr.Size = boxVec
+                        mr.Transparency = 0.85
+                    end
+                    mr.AssemblyLinearVelocity = ZeroVec
+                    if mh.WalkSpeed ~= 0 then mh.WalkSpeed = 0 end
+                    if mh.JumpPower ~= 0 then mh.JumpPower = 0 end
+                    if Config.BringMobs and (mr.Position - targetPos).Magnitude > 1.5 then
+                        mr.CFrame = CFrame.new(targetPos)
+                    end
+                end)
+            end
+        end
+    end
+end
+
+local function executeAttack(mob)
+    if FSM.Completed or not isCurrentRunActive() then return end
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not root then return end
+
+    if not char:FindFirstChild("HasBuso") and (os.clock() - FSM.LastBusoTry) >= Config.BusoRetryCooldown then
+        FSM.LastBusoTry = os.clock()
+        task.spawn(function()
+            if not isCurrentRunActive() or FSM.Completed then return end
+            pcall(function()
+                local comm = getCommF()
+                if comm then comm:InvokeServer("Buso") end
+            end)
+        end)
+    end
+
+    local tool = equipBestTool()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    pcall(function()
+        local regAtk, regHit = getCombatRemotes()
+        local enemies = Workspace:FindFirstChild("Enemies")
+        if regAtk and regHit and mob and mob:FindFirstChild("HumanoidRootPart") then
+            local targets = {}
+            if enemies then
+                for _, enemy in ipairs(enemies:GetChildren()) do
+                    local er = enemy:FindFirstChild("HumanoidRootPart")
+                    local eh = enemy:FindFirstChildOfClass("Humanoid")
+                    if er and eh and eh.Health > 0 and (er.Position - root.Position).Magnitude <= 65 then
+                        table.insert(targets, {enemy, er})
+                    end
+                end
+            end
+            if #targets == 0 then
+                table.insert(targets, {mob, mob.HumanoidRootPart})
+            end
+            regAtk:FireServer(0)
+            regHit:FireServer(mob.HumanoidRootPart, targets)
+        end
+    end)
+
+    pcall(function()
+        local ctrl = getCombatFrameworkController()
+        if ctrl then
+            ctrl.timeToNextAttack = 0
+            ctrl.hitboxMagnitude = 60
+            ctrl:attack()
+        end
+    end)
+
+    pcall(function()
+        VirtualUser:CaptureController()
+        local camCF = (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame) or CFrame.new()
+        VirtualUser:Button1Down(Vector2.new(600, 280), camCF)
+        VirtualUser:Button1Up(Vector2.new(600, 280), camCF)
+    end)
+end
+
+task.spawn(function()
+    while isCurrentRunActive() and not FSM.Completed and task.wait(Config.FastAttackInterval) do
+        if not isCurrentRunActive() or FSM.Completed then break end
+        if Env.OllieV8_Enabled
+            and not FSM.GroundedAtNPC
+            and not FSM.IsHealingState
+            and FSM.ActiveCombatMob
+        then
+            pcall(function()
+                local mh = FSM.ActiveCombatMob:FindFirstChildOfClass("Humanoid")
+                local mr = FSM.ActiveCombatMob:FindFirstChild("HumanoidRootPart")
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if mh and mr and myRoot and mh.Health > 0 and (mr.Position - myRoot.Position).Magnitude <= 50 then
+                    executeAttack(FSM.ActiveCombatMob)
+                end
+            end)
+        end
+    end
+end)
+
+-- ============================================================================
+-- 9. АВТО-СТАТЫ И ФРУКТЫ (С УЧЕТОМ AutoRollFruit)
+-- ============================================================================
+task.spawn(function()
+    while isCurrentRunActive() and not FSM.Completed and task.wait(4) do
+        if not isCurrentRunActive() or FSM.Completed then break end
+        if Env.OllieV8_Enabled then
+            local comm = getCommF()
+            if comm then
+                if Config.AutoStats then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local pts = d and d:FindFirstChild("Points")
+                        if pts and pts.Value > 0 then
+                            local spend = math.min(pts.Value, 30)
+                            local meleePts = math.ceil(spend * 0.6)
+                            local defPts = math.max(1, spend - meleePts)
+                            comm:InvokeServer("AddPoint", "Melee", meleePts)
+                            comm:InvokeServer("AddPoint", "Defense", defPts)
+                        end
+                    end)
+                end
+                -- Срабатывает, только если Config.AutoRollFruit = true (по умолчанию false)
+                if Config.AutoRollFruit and not FSM.Completed then
+                    pcall(function() comm:InvokeServer("Cousin", "Buy") end)
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================================
+-- 10. ГЛАВНЫЙ УПРАВЛЯЮЩИЙ АВТОМАТ (FSM V8.2 — MAX_LEVEL 700)
+-- ============================================================================
+task.spawn(function()
+    while isCurrentRunActive() and not FSM.Completed and task.wait(Config.LoopInterval) do
+        if not isCurrentRunActive() or FSM.Completed then
+            break
+        end
+
+        if not Env.OllieV8_Enabled then
+            FSM.DesiredGoalCFrame = nil
+            FSM.GroundedAtNPC = false
+            FSM.ActiveCombatMob = nil
+        else
+            local loopOk, loopErr = pcall(function()
+                if not ensureTeam() then return end
+
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+                if not char or not root or not hum or hum.Health <= 0 then
+                    FSM.DesiredGoalCFrame = nil
+                    FSM.GroundedAtNPC = false
+                    FSM.IsHealingState = false
+                    FSM.SafeHealCFrame = nil
+                    FSM.ActiveCombatMob = nil
+                    setFSMState("WAIT_SPAWN", "Ожидание спавна персонажа...")
+                    return
+                end
+
+                clearBlockingDialogue()
+
+                local qData, myLvl, progressStatus = evaluatePlayerProgressAndQuest()
+                if progressStatus == "DATA_NOT_LOADED" then
+                    setFSMState("WAIT_DATA", "Ожидание загрузки Data.Level...")
+                    return
+                elseif progressStatus == "GOAL_REACHED" then
+                    task.wait(0.3)
+                    local _, recheckLvl, recheckStatus = evaluatePlayerProgressAndQuest()
+                    if recheckStatus == "GOAL_REACHED" and recheckLvl >= Config.MaxLevel then
+                        setFSMState("COMPLETED", "ФАРМ ОКОНЧЕН — ВСЕ ПОСТАВЛЕННЫЕ ЦЕЛИ ВЫПОЛНЕНЫ", recheckLvl, "COMPLETED")
+                        updateHudCompletionState(recheckLvl)
+
+                        if not FSM.CompletionNotified then
+                            FSM.CompletionNotified = true
+                            print(string.format("[OLLIE V8.2] ФАРМ ОКОНЧЕН — ВСЕ ПОСТАВЛЕННЫЕ ЦЕЛИ ВЫПОЛНЕНЫ (LVL %d / %d)", recheckLvl, Config.MaxLevel))
+                            sendScreenNotification("OLLIE ENGINE V8.2", "ФАРМ ОКОНЧЕН — ВСЕ ПОСТАВЛЕННЫЕ ЦЕЛИ ВЫПОЛНЕНЫ", 10)
+                        end
+
+                        stopAllBackgroundTasksOnCompletion()
+                        return
+                    else
+                        setFSMState("VERIFY_COMPLETION", "Повторная проверка достижения уровня " .. tostring(Config.MaxLevel) .. "...", recheckLvl, "VERIFY")
+                        return
+                    end
+                elseif not qData then
+                    FSM.DesiredGoalCFrame = nil
+                    FSM.GroundedAtNPC = false
+                    FSM.ActiveCombatMob = nil
+                    restoreModifiedCollisions()
+                    setFSMState("OUT_OF_RANGE", "Уровень " .. tostring(myLvl) .. " вне допустимого диапазона!", myLvl, "NONE")
+                    return
+                end
+
+                local expectedQuestKey = qData.QName .. "_" .. tostring(qData.QNum)
+
+                -- === ПРОВЕРКА ЗДОРОВЬЯ (HEALING FSM) ===
+                local hpRatio = hum.Health / math.max(hum.MaxHealth, 1)
+                if Config.SafeModeEnabled then
+                    if hpRatio < Config.LowHpThreshold and not FSM.IsHealingState then
+                        FSM.IsHealingState = true
+                        FSM.GroundedAtNPC = false
+                        FSM.ActiveCombatMob = nil
+                        FSM.SafeHealCFrame = CFrame.new(root.Position.X, math.max(root.Position.Y + Config.SafeSkyOffset, 250), root.Position.Z)
+                    elseif FSM.IsHealingState and hpRatio >= Config.RecoverHpThreshold then
+                        FSM.IsHealingState = false
+                        FSM.SafeHealCFrame = nil
+                    end
+                else
+                    FSM.IsHealingState = false
+                end
+
+                if FSM.IsHealingState and FSM.SafeHealCFrame then
+                    FSM.GroundedAtNPC = false
+                    FSM.ActiveCombatMob = nil
+                    FSM.DesiredGoalCFrame = FSM.SafeHealCFrame
+                    setFSMState(
+                        "HEALING",
+                        string.format("ОТХИЛ В НЕБЕ [HP: %d%% / %d%%]", math.floor(hpRatio * 100), math.floor(Config.RecoverHpThreshold * 100)),
+                        myLvl,
+                        expectedQuestKey
+                    )
+                    return
+                end
+
+                -- === ПРОВЕРКА ТЕКУЩЕГО КВЕСТА (CHECK_QUEST / ABANDON_QUEST) ===
+                local guiVisible, matchState, guiSnippet, guiRawText = inspectActiveQuestMatch(qData)
+
+                if not guiVisible then
+                    if FSM.CurrentTrackedQuestKey ~= nil then
+                        print(string.format("[QUEST DIAG] Окно Quest скрыто -> сброс CurrentTrackedQuestKey (%s -> nil).", tostring(FSM.CurrentTrackedQuestKey)))
+                    end
+                    FSM.CurrentTrackedQuestKey = nil
+                else
+                    local shouldAbandonImmediately = false
+                    local abandonReason = nil
+
+                    if FSM.CurrentTrackedQuestKey ~= nil and FSM.CurrentTrackedQuestKey ~= expectedQuestKey then
+                        shouldAbandonImmediately = true
+                        abandonReason = string.format("Смена целевого квеста по уровню (%s -> %s)", tostring(FSM.CurrentTrackedQuestKey), expectedQuestKey)
+                    elseif matchState == "MISMATCH" then
+                        shouldAbandonImmediately = true
+                        abandonReason = string.format("Явный MISMATCH текста GUI ('%s') с целевым мобом %s", tostring(guiSnippet), qData.Mob)
+                    elseif matchState == "MATCH" then
+                        FSM.CurrentTrackedQuestKey = expectedQuestKey
+                    elseif matchState == "UNDECIDED_LOCALIZED" then
+                        if FSM.CurrentTrackedQuestKey ~= expectedQuestKey then
+                            print(string.format(
+                                "[QUEST DIAG] Нераспознанное окно Quest (state=%s, tracked=%s, expected=%s, text='%s'). Летим к NPC для проверки диффа.",
+                                matchState,
+                                tostring(FSM.CurrentTrackedQuestKey),
+                                expectedQuestKey,
+                                tostring(guiSnippet)
+                            ))
+                        end
+                    end
+
+                    if shouldAbandonImmediately then
+                        FSM.ActiveCombatMob = nil
+                        setFSMState("ABANDON_QUEST", "Отмена старого квеста: " .. tostring(abandonReason), myLvl, expectedQuestKey)
+                        print(string.format("[QUEST DIAG] Немедленный AbandonQuest! Причина: %s", tostring(abandonReason)))
+                        local comm = getCommF()
+                        if comm then
+                            pcall(function() comm:InvokeServer("AbandonQuest") end)
+                        end
+                        FSM.CurrentTrackedQuestKey = nil
+                        waitForQuestGuiState(false, 2.5)
+                        guiVisible, matchState, guiSnippet, guiRawText = inspectActiveQuestMatch(qData)
+                    end
+                end
+
+                local hasVerifiedQuest = guiVisible and (FSM.CurrentTrackedQuestKey == expectedQuestKey)
+
+                if not hasVerifiedQuest then
+                    -- ШАГ 1: MOVE_TO_NPC / TAKE_QUEST
+                    FSM.ActiveCombatMob = nil
+                    local npcTargetCF = getLiveNPCCFrame(qData)
+
+                    tryFastPortalTransition(root, npcTargetCF.Position)
+                    local npcDist = (root.Position - npcTargetCF.Position).Magnitude
+
+                    if npcDist > 7 then
+                        FSM.GroundedAtNPC = false
+                        FSM.DesiredGoalCFrame = npcTargetCF
+                        if NavBypass.Phase == "BLOCKED_HALT" then
+                            setFSMState("BLOCKED_HALT", "ПАУЗА ОБХОДА ПРЕГРАДЫ (авто-повтор через 8 с)...", myLvl, expectedQuestKey)
+                        else
+                            setFSMState(
+                                "MOVE_TO_NPC",
+                                string.format("Летим к NPC %s (%dм) [GUI:%s]", tostring(qData.NPC), math.floor(npcDist), matchState),
+                                myLvl,
+                                expectedQuestKey
+                            )
+                        end
+                        requestStreamThrottled(npcTargetCF.Position)
+                    else
+                        requestStreamThrottled(npcTargetCF.Position)
+                        local visBefore, stateBefore, snipBefore, rawBefore = inspectActiveQuestMatch(qData)
+
+                        FSM.GroundedAtNPC = true
+                        FSM.DesiredGoalCFrame = nil
+                        restoreModifiedCollisions()
+                        root.CFrame = npcTargetCF
+                        hum:MoveTo(npcTargetCF.Position)
+                        task.wait(0.35)
+
+                        local comm = getCommF()
+                        local invokeOk = false
+                        local serverReply = "no_comm"
+                        if comm then
+                            root.CFrame = npcTargetCF
+                            invokeOk, serverReply = pcall(function()
+                                return comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
+                            end)
+                        end
+
+                        FSM.GroundedAtNPC = false
+                        FSM.DesiredGoalCFrame = npcTargetCF
+                        FSM.QuestTriesAtNPC = FSM.QuestTriesAtNPC + 1
+
+                        local diffConfirmed, diffReason, visAfter, matchAfter, snipAfter, rawAfter =
+                            waitForQuestActivationDiff(qData, visBefore, rawBefore, 1.5, root, npcTargetCF)
+
+                        print(string.format(
+                            "[QUEST DIAG] Try #%d | Quest=%s (Mob=%s) | pcall=%s reply=%s | BEFORE(vis=%s, st=%s, txt='%s') -> AFTER(vis=%s, st=%s, txt='%s') | diff=%s(%s)",
+                            FSM.QuestTriesAtNPC,
+                            expectedQuestKey,
+                            qData.Mob,
+                            tostring(invokeOk),
+                            tostring(serverReply),
+                            tostring(visBefore),
+                            tostring(stateBefore),
+                            tostring(snipBefore),
+                            tostring(visAfter),
+                            tostring(matchAfter),
+                            tostring(snipAfter),
+                            tostring(diffConfirmed),
+                            tostring(diffReason)
+                        ))
+
+                        if diffConfirmed then
+                            FSM.CurrentTrackedQuestKey = expectedQuestKey
+                            FSM.QuestTriesAtNPC = 0
+                            FSM.UnverifiedTriesAtNPC = 0
+                            setFSMState(
+                                "QUEST_CONFIRMED",
+                                string.format("Квест принят [%s]! Переход к бою.", tostring(diffReason)),
+                                myLvl,
+                                expectedQuestKey
+                            )
+                        else
+                            if visBefore and visAfter and rawAfter == rawBefore then
+                                FSM.UnverifiedTriesAtNPC = FSM.UnverifiedTriesAtNPC + 1
+                            else
+                                FSM.UnverifiedTriesAtNPC = 0
+                            end
+
+                            if FSM.UnverifiedTriesAtNPC >= 2 then
+                                print(string.format(
+                                    "[QUEST DIAG] Нераспознанное окно Quest не изменилось после 2 попыток StartQuest у %s (txt='%s'). Вызываем AbandonQuest!",
+                                    tostring(qData.NPC),
+                                    tostring(snipAfter)
+                                ))
+                                setFSMState("ABANDON_QUEST", "Очистка зависшего старого квеста в слоте...", myLvl, expectedQuestKey)
+                                if comm then
+                                    pcall(function() comm:InvokeServer("AbandonQuest") end)
+                                end
+                                FSM.CurrentTrackedQuestKey = nil
+                                waitForQuestGuiState(false, 2.5)
+                                FSM.QuestTriesAtNPC = 0
+                                FSM.UnverifiedTriesAtNPC = 0
+                            else
+                                setFSMState(
+                                    "TAKE_QUEST",
+                                    string.format(
+                                        "Взятие #%d: отв=%s дифф=%s GUI=%s(%s)",
+                                        FSM.QuestTriesAtNPC,
+                                        tostring(serverReply),
+                                        tostring(diffReason),
+                                        tostring(visAfter),
+                                        tostring(matchAfter)
+                                    ),
+                                    myLvl,
+                                    expectedQuestKey
+                                )
+                                if FSM.QuestTriesAtNPC >= 4 then
+                                    print("[QUEST DIAG] 4 попытки у NPC без диффа GUI -> сброс счетчика попыток.")
+                                    FSM.QuestTriesAtNPC = 0
+                                end
+                            end
+                        end
+                    end
+                else
+                    -- ШАГ 2: COMBAT / PATROL_SPAWN
+                    FSM.GroundedAtNPC = false
+                    FSM.QuestTriesAtNPC = 0
+                    FSM.UnverifiedTriesAtNPC = 0
+
+                    local mob = findTargetMob(qData)
+                    if mob and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChildOfClass("Humanoid") then
+                        FSM.ActiveCombatMob = mob
+                        local mPos = mob.HumanoidRootPart.Position
+                        tryFastPortalTransition(root, mPos)
+
+                        local distToMob = (root.Position - mPos).Magnitude
+                        local attackPos = mPos + Vector3.new(0, Config.AttackHeight, Config.AttackBackOffset)
+                        FSM.DesiredGoalCFrame = CFrame.new(attackPos, mPos)
+
+                        if NavBypass.Phase == "BLOCKED_HALT" then
+                            setFSMState("BLOCKED_HALT", "ПАУЗА ОБХОДА К МОБУ (авто-повтор через 8 с)...", myLvl, expectedQuestKey)
+                        else
+                            setFSMState(
+                                "COMBAT",
+                                "Бьем: " .. mob.Name .. " [HP: " .. tostring(math.floor(mob.Humanoid.Health)) .. "]",
+                                myLvl,
+                                expectedQuestKey
+                            )
+                        end
+
+                        if distToMob <= 50 then
+                            pullMobsTogether(qData.Mob, mPos)
+                        end
+                    else
+                        FSM.ActiveCombatMob = nil
+                        local waypoints = getMobSpawnWaypoints(qData)
+
+                        if #waypoints > 1 and (os.clock() - FSM.LastPatrolSwitchClock) >= Config.SpawnPatrolInterval then
+                            FSM.LastPatrolSwitchClock = os.clock()
+                            FSM.PatrolIndex = (FSM.PatrolIndex % #waypoints) + 1
+                        end
+                        if FSM.PatrolIndex > #waypoints then
+                            FSM.PatrolIndex = 1
+                        end
+
+                        local targetSpawnCF = waypoints[FSM.PatrolIndex]
+                        tryFastPortalTransition(root, targetSpawnCF.Position)
+                        requestStreamThrottled(targetSpawnCF.Position)
+
+                        local waitDist = (root.Position - targetSpawnCF.Position).Magnitude
+                        FSM.DesiredGoalCFrame = targetSpawnCF
+
+                        if NavBypass.Phase == "BLOCKED_HALT" then
+                            setFSMState(
+                                "BLOCKED_HALT",
+                                string.format("ПАУЗА ОБХОДА К СПАВНУ [Точка %d/%d] (авто-повтор)", FSM.PatrolIndex, #waypoints),
+                                myLvl,
+                                expectedQuestKey
+                            )
+                        elseif waitDist <= 8 then
+                            setFSMState(
+                                "PATROL_SPAWN",
+                                string.format("Ждем спавн %s [Точка %d/%d]", qData.Mob, FSM.PatrolIndex, #waypoints),
+                                myLvl,
+                                expectedQuestKey
+                            )
+                        else
+                            setFSMState(
+                                "PATROL_SPAWN",
+                                string.format("Летим к спавну %s (%dм) [Точка %d/%d]", qData.Mob, math.floor(waitDist), FSM.PatrolIndex, #waypoints),
+                                myLvl,
+                                expectedQuestKey
+                            )
+                        end
+                    end
+                end
+            end)
+
+            if not loopOk then
+                setFSMState("ERROR_RECOVERY", "Ошибка цикла (перехвачена): " .. string.sub(tostring(loopErr), 1, 36))
+            end
+        end
+    end
+end)
