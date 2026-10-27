@@ -1,12 +1,11 @@
--- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8.3 - MULTI-SEA FARM (UP TO 3000) ]] --
+-- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8.3 - SKY BUG & STUCK FIXED ]] --
 -- Language: Lua 5.1 / Luau | Runtime: Delta / Project Real / Windows & Android Executors
 -- Архитектура V8.3:
---   1. Фарм до 3000 уровня (авто-переход в Sea 2 и Sea 3).
---   2. ИСПРАВЛЕНО: Устранен баг взлета в небо при взятии квеста (блокировка NavBypass во время TAKE_QUEST).
---   3. ИСПРАВЛЕНО: Улучшен поиск GUI квеста и папки NPC (добавлен _WorldOrigin).
+--   1. Фарм до 3000 уровня.
+--   2. ГЛОБАЛЬНОЕ ИСПРАВЛЕНИЕ: Исправлен баг застревания в небе (пороги NavBypass пересчитаны).
+--   3. ИСПРАВЛЕНО: Добавлен лимит шага (античит) и смещение Y+2 для NPC, чтобы не застревать в текстурах.
 --   4. Двуязычный анализатор квестов (RU + EN).
---   5. Строгий префиксный фильтр мобов и спавнов mobNameMatches().
---   6. Постоянное кэширование ссылки на инстанс Quest Frame.
+--   5. Строгий префиксный фильтр мобов.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -103,7 +102,7 @@ local function sendScreenNotification(title, text, duration)
     end)
 end
 
-sendScreenNotification("OLLIE ENGINE V8.3", string.format("Запуск V8.3 [Run #%d]: Фарм до %d lvl + Фикс неба!", MyRunId, MAX_LEVEL), 5)
+sendScreenNotification("OLLIE ENGINE V8.3", string.format("Запуск V8.3 [Run #%d]: Фикс застревания в небе!", MyRunId), 5)
 
 local restoreModifiedCollisions = function() end
 local updateHudCompletionState = function() end
@@ -276,9 +275,6 @@ local function setFSMState(newState, statusMsg, lvl, qKey)
     end)
 end
 
--- ============================================================================
--- HOP FSM
--- ============================================================================
 local HopFSM = { Status = "IDLE", OriginJobId = "", FailReason = "" }
 
 table.insert(Env.OllieV83_Connections, TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
@@ -426,9 +422,6 @@ local function mobNameMatches(enemyName, mobName)
     return c == "" or c == " " or c == "["
 end
 
--- ============================================================================
--- ТАБЛИЦА КВЕСТОВ (1 .. 3000)
--- ============================================================================
 local QuestsAll = {
     -- SEA 1 (1-700) --
     {Min = 1,   Max = 9,             Mob = "Bandit",              EnStems = {"bandit"},                         RuStems = {"бандит"},                                          ExcludeRu = {"небесн", "пустынн", "снежн"}, NPC = "Bandit Quest Giver",    QName = "BanditQuest1",   QNum = 1, QPos = CFrame.new(1059.37, 16.36, 1549.25),   MPos = CFrame.new(1145.00, 17.00, 1634.00)},
@@ -718,12 +711,9 @@ local function tryFastPortalTransition(rootPart, targetPos, currentLvl)
 
     local portalToUse = nil
 
-    -- Logic for Sea transitions
     if currentLvl >= 700 and currentLvl < 1500 and curPos.Y < 500 and curPos.X > -500 then
-        -- If in Sea 1 but need Sea 2
         if targetPos.X < -1000 or targetPos.Z < 0 then portalToUse = SeaPortals.Sea2 end
     elseif currentLvl >= 1500 and curPos.Y < 500 and curPos.X > -10000 then
-        -- If in Sea 1 or 2 but need Sea 3
         portalToUse = SeaPortals.Sea3
     end
 
@@ -761,7 +751,6 @@ end
 local function getLiveNPCCFrame(qData)
     local npcFolders = {
         Workspace:FindFirstChild("NPCs"),
-        ReplicatedStorage:FindFirstChild("NPCs"),
         Workspace:FindFirstChild("_WorldOrigin") and Workspace._WorldOrigin:FindFirstChild("NPCs")
     }
     for _, folder in ipairs(npcFolders) do
@@ -771,7 +760,8 @@ local function getLiveNPCCFrame(qData)
                 if exact then
                     local r = exact:FindFirstChild("HumanoidRootPart") or exact:FindFirstChild("Head") or exact.PrimaryPart
                     if r and (r.Position - qData.QPos.Position).Magnitude <= 250 then
-                        return r.CFrame * CFrame.new(0, 0, -2.5)
+                        -- Смещение Y+2, Z-4 предотвращает застревание в полу
+                        return r.CFrame * CFrame.new(0, 2, -4)
                     end
                 end
             end
@@ -781,13 +771,13 @@ local function getLiveNPCCFrame(qData)
                 local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
                 if r then
                     local d = (r.Position - qData.QPos.Position).Magnitude
-                    if d < bestDist then bestDist = d bestCF = r.CFrame * CFrame.new(0, 0, -2.5) end
+                    if d < bestDist then bestDist = d bestCF = r.CFrame * CFrame.new(0, 2, -4) end
                 end
             end
             if bestCF then return bestCF end
         end
     end
-    return qData.QPos
+    return qData.QPos * CFrame.new(0, 2, -4)
 end
 
 local WaypointCache = { QuestKey = "", UpdatedAt = 0, Points = {} }
@@ -895,7 +885,7 @@ local function startNextBypassClimb(curPos, finalDstPos, now)
     NavBypass.AttemptsUsed = NavBypass.AttemptsUsed + 1
     NavBypass.Phase = "CLIMB"
     NavBypass.PhaseStartedAt = now
-    local lateralShift = (NavBypass.AttemptsUsed > 1) and ((NavBypass.AttemptsUsed % 2 == 0) and 18 or -18) or 0
+    local lateralShift = (NavBypass.AttemptsUsed > 1) and ((NavBypass.AttemptsUsed % 2 == 0) and 25 or -25) or 0
     NavBypass.ClimbAnchorX = curPos.X + lateralShift
     NavBypass.ClimbAnchorZ = curPos.Z + lateralShift
     local extraHeight = Config.BypassClimbHeight + ((NavBypass.AttemptsUsed - 1) * 100)
@@ -943,7 +933,7 @@ table.insert(Env.OllieV83_Connections, RunService.Heartbeat:Connect(function(dt)
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not root or not hum then return end
 
-    -- ИСПРАВЛЕНО: Блокировка Heartbeat во время TAKE_QUEST, чтобы NavBypass не улетал в небо
+    -- Блокировка Heartbeat во время TAKE_QUEST
     if not Env.OllieV83_Enabled or FSM.Completed or hum.Health <= 0 or FSM.GroundedAtNPC or FSM.State == "TAKE_QUEST" then
         restoreModifiedCollisions()
         resetNavBypass(false)
@@ -1015,7 +1005,8 @@ table.insert(Env.OllieV83_Connections, RunService.Heartbeat:Connect(function(dt)
             startNextBypassClimb(curPos, finalDstPos, now)
         end
     elseif NavBypass.Phase == "CRUISE_OVER" then
-        if horizGapToGoal <= 14.0 then
+        -- ИСПРАВЛЕНО: Уменьшен порог с 14.0 до 5.0, чтобы не сбрасывать обход раньше времени
+        if horizGapToGoal <= 5.0 then
             resetNavBypass(true)
             NavBypass.LastGoalDist = totalDist
             NavBypass.LastSamplePos = curPos
@@ -1023,7 +1014,7 @@ table.insert(Env.OllieV83_Connections, RunService.Heartbeat:Connect(function(dt)
         else
             if (now - NavBypass.LastCheckClock) >= 0.7 then
                 local moved = NavBypass.LastSamplePos and (curPos - NavBypass.LastSamplePos).Magnitude or 999
-                if moved < 6.0 or (now - NavBypass.PhaseStartedAt) >= 6.5 then
+                if moved < 2.0 or (now - NavBypass.PhaseStartedAt) >= 6.5 then
                     startNextBypassClimb(curPos, finalDstPos, now)
                 end
                 NavBypass.LastSamplePos = curPos
@@ -1031,10 +1022,12 @@ table.insert(Env.OllieV83_Connections, RunService.Heartbeat:Connect(function(dt)
             end
         end
     else
-        if totalDist > 14.0 and (now - NavBypass.LastCheckClock) >= 0.65 then
+        -- ИСПРАВЛЕНО: Уменьшен порог с 14.0 до 7.0, чтобы застревание распознавалось раньше
+        if totalDist > 7.0 and (now - NavBypass.LastCheckClock) >= 0.65 then
             local distReduced = NavBypass.LastGoalDist - totalDist
             local actualMoved = NavBypass.LastSamplePos and (curPos - NavBypass.LastSamplePos).Magnitude or 999
-            if distReduced < 6.0 or actualMoved < 6.0 then
+
+            if distReduced < 2.0 or actualMoved < 2.0 then
                 NavBypass.StuckTicks = NavBypass.StuckTicks + 1
                 if NavBypass.StuckTicks >= 2 then startNextBypassClimb(curPos, finalDstPos, now) end
             else
@@ -1065,6 +1058,7 @@ table.insert(Env.OllieV83_Connections, RunService.Heartbeat:Connect(function(dt)
         root.CFrame = CFrame.new(curPos) * goalCF.Rotation
     else
         local step = math.min(distToStepTarget, Config.FlightSpeed * dt)
+        step = math.min(step, 4.5) -- ИСПРАВЛЕНО: Ограничение прыжка за кадр (античит/сглаживание)
         local nextPos = curPos + (delta.Unit * step)
         local lookHoriz = Vector3.new(finalDstPos.X - nextPos.X, 0, finalDstPos.Z - nextPos.Z).Magnitude
         if lookHoriz > 0.05 then
@@ -1417,7 +1411,7 @@ task.spawn(function()
                         restoreModifiedCollisions()
                         root.CFrame = npcTargetCF
                         hum:MoveTo(npcTargetCF.Position)
-                        task.wait(0.35)
+                        task.wait(0.5)
 
                         local comm = getCommF()
                         local invokeOk = false
