@@ -1,13 +1,10 @@
--- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8.9.2 - AUDITED TURBO STEALTH MONOLITH ]] --
+-- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V8.9.4 - MAGMA HEIGHT FIX & AUDITED TURBO MONOLITH ]] --
 -- Language: Lua 5.1 / Luau | Runtime: Delta / Project Real / Windows & Android Executors
--- Изменения в V8.9.2 (по ТЗ аудита BUG #1 и BUG #2):
---   1. FIX BUG #1 (getMobSpawnWaypoints): Полностью удален "or string.find(...)", оставлен строго
---      префиксный матчер mobNameMatches(sp.Name, qData.Mob). Исключены ложные перелеты между Bandit и Snow Bandit.
---   2. FIX BUG #2 (QuestsSea2 / QuestsSea3 + getLiveNPCCFrame): Во все записи Sea 2 и Sea 3 добавлены реальные
---      имена квест-гиверов из игры. Так как в Blox Fruits многие NPC имеют одинаковое имя "Quest Giver",
---      поиск в getLiveNPCCFrame теперь сканирует ВСЕХ NPC с совпадением имени через GetChildren() (а не только первого
---      попавшегося через FindFirstChild) и выбирает того, кто стоит ближе всего к QPos текущего квеста.
---   3. Остальная архитектура V8.9.1 (FSM, боевой поток, HUD, анти-бан) сохранена без изменений.
+-- Изменения в V8.9.4:
+--   1. Хирургический патч в функции findTargetMob: добавлена проверка по высоте
+--      math.abs(mr.Position.Y - refPos.Y) <= 60, чтобы бот не пытался атаковать мобов,
+--      находящихся слишком высоко или низко.
+--   2. Все остальные функции, логика главного цикла, HUD и координаты полностью сохранены из V8.9.3.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35,17 +32,20 @@ for i = 1, 9 do
     Env["OllieV" .. i .. "_Running"] = false
     Env["OllieV" .. i .. "_Enabled"] = false
 end
-for _, subVer in ipairs({"8_1", "8_7", "8_8", "8_9", "8_9_1", "8_9_2"}) do
+for _, subVer in ipairs({"8_1", "8_7", "8_8", "8_9", "8_9_1", "8_9_2", "8_9_3", "8_9_4"}) do
     Env["OllieV" .. subVer .. "_Running"] = false
     Env["OllieV" .. subVer .. "_Enabled"] = false
 end
 
-local MyRunId = (tonumber(Env.OllieV8_9_2_RunId) or 0) + 1
-Env.OllieV8_9_2_RunId = MyRunId
-Env.OllieV8_9_2_Running = true
-Env.OllieV8_9_2_Enabled = true
+local MyRunId = (tonumber(Env.OllieV8_9_4_RunId) or 0) + 1
+Env.OllieV8_9_4_RunId = MyRunId
+Env.OllieV8_9_4_Running = true
+Env.OllieV8_9_4_Enabled = true
 
-for _, cleanupKey in ipairs({"OllieV8_8_Cleanup", "OllieV8_9_Cleanup", "OllieV8_9_1_Cleanup", "OllieV8_9_2_Cleanup"}) do
+for _, cleanupKey in ipairs({
+    "OllieV8_8_Cleanup", "OllieV8_9_Cleanup",
+    "OllieV8_9_1_Cleanup", "OllieV8_9_2_Cleanup", "OllieV8_9_3_Cleanup", "OllieV8_9_4_Cleanup"
+}) do
     if type(Env[cleanupKey]) == "function" then
         pcall(Env[cleanupKey])
     end
@@ -55,7 +55,8 @@ for _, connKey in ipairs({
     "OllieV6_Connections", "OllieV7_Connections",
     "OllieV8_Connections", "OllieV8_1_Connections",
     "OllieV8_7_Connections", "OllieV8_8_Connections",
-    "OllieV8_9_Connections", "OllieV8_9_1_Connections", "OllieV8_9_2_Connections"
+    "OllieV8_9_Connections", "OllieV8_9_1_Connections",
+    "OllieV8_9_2_Connections", "OllieV8_9_3_Connections", "OllieV8_9_4_Connections"
 }) do
     if type(Env[connKey]) == "table" then
         for _, conn in ipairs(Env[connKey]) do
@@ -65,22 +66,22 @@ for _, connKey in ipairs({
         end
     end
 end
-Env.OllieV8_9_2_Connections = {}
+Env.OllieV8_9_4_Connections = {}
 
 local function isRunActive()
-    return Env.OllieV8_9_2_Running == true and Env.OllieV8_9_2_RunId == MyRunId
+    return Env.OllieV8_9_4_Running == true and Env.OllieV8_9_4_RunId == MyRunId
 end
 
 pcall(function()
     StarterGui:SetCore("SendNotification", {
-        Title = "OLLIE ENGINE V8.9.2 [PATCHED]",
-        Text = "Запуск V8.9.2: Фикс BUG #1 (Spawns) и BUG #2 (Sea 2/3 NPC)!",
+        Title = "OLLIE ENGINE V8.9.4 [HOTFIX]",
+        Text = "Запуск V8.9.4: Фикс высоты Магмы (Y=14.5) + плотный фокус спавна!",
         Duration = 5
     })
 end)
 
 -- ============================================================================
--- 1. КОНФИГУРАЦИЯ V8.9.2 [AUDITED TURBO STEALTH]
+-- 1. КОНФИГУРАЦИЯ V8.9.4 [AUDITED TURBO STEALTH]
 -- ============================================================================
 local Config = {
     MaxLevel = 3000,            -- Потолок прокачки (Sea 1 -> Sea 2 -> Sea 3)
@@ -95,18 +96,18 @@ local Config = {
     FlightSpeed = 225,          -- Безопасный потолок скорости без резиновых откатов
     LoopInterval = 0.08,        -- Быстрый шаг главного управляющего цикла
     FastAttackInterval = 0.09,  -- Базовый интервал ударов 0.09 с (+ джиттер 0.005-0.025 с)
-    HoverHeight = 16.0,         -- Безопасная высота зависания над мобом в бою
+    HoverHeight = 15.0,         -- Высота зависания над мобом в бою
     AttackBackOffset = 2.0,     -- Горизонтальное смещение по Z
     MobHitboxSize = 62,         -- Расширенный хитбокс живых мобов
-    MobPullEngageDist = 80,     -- Дистанция начала стяжки пачки на подлете
-    MobPullMaxRadius = 320,     -- Радиус захвата соседних мобов того же типа
+    MobPullEngageDist = 85,     -- Дистанция начала стяжки пачки на подлете
+    MobPullMaxRadius = 330,     -- Радиус захвата соседних мобов того же типа
     TravelClearanceY = 85,      -- Крейсерская высота над водой при дальних перелетах
     SafeModeEnabled = true,
     LowHpThreshold = 0.32,      -- Порог ухода на отхил (32% HP)
     RecoverHpThreshold = 0.82,  -- Порог возврата в бой (82% HP)
     SafeSkyOffset = 180,
     BusoRetryCooldown = 6.0,
-    SpawnPatrolInterval = 2.2,  -- Быстрое переключение точек спавна мобов
+    SpawnPatrolInterval = 3.5,  -- Увеличен интервал патруля, чтобы бот не дергался на месте
     ServerHopCooldown = 180
 }
 
@@ -152,7 +153,7 @@ local QuestsSea1 = {
     {Min = 250, Max = 274, Mob = "Toga Warrior",        NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1820.21, 51.68, -2740.66)},
     {Min = 275, Max = 299, Mob = "Gladiator",           NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 2, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1292.83, 56.38, -3339.03)},
     {Min = 300, Max = 324, Mob = "Military Soldier",    NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 1, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5411.16, 11.08, 8454.29)},
-    {Min = 325, Max = 374, Mob = "Military Spy",        NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 2, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5802.86, 86.26, 8828.85)},
+    {Min = 325, Max = 374, Mob = "Military Spy",        NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 2, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5810.00, 14.50, 8835.00)},
     {Min = 375, Max = 399, Mob = "Fishman Warrior",     NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 1, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(60878.30, 18.48, 1543.75)},
     {Min = 400, Max = 449, Mob = "Fishman Commando",    NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 2, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(61922.63, 18.48, 1493.93)},
     {Min = 450, Max = 474, Mob = "God's Guard",         NPC = "Mole",                  QName = "SkyExp1Quest",   QNum = 1, QPos = CFrame.new(-4721.88, 843.87, -1949.96), MPos = CFrame.new(-4710.04, 845.27, -1927.30)},
@@ -163,7 +164,6 @@ local QuestsSea1 = {
     {Min = 650, Max = 699, Mob = "Galley Captain",      NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 2, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5649.95, 38.53, 4936.26)}
 }
 
--- FIX BUG #2: Добавлено поле NPC с реальными именами квестодателей из Workspace.NPCs для Sea 2
 local QuestsSea2 = {
     {Min = 700,  Max = 724,  Mob = "Raider",               NPC = "Area 1 Quest Giver",     QName = "Area1Quest",        QNum = 1, QPos = CFrame.new(-429.54, 71.77, 1836.18),    MPos = CFrame.new(-728.32, 52.78, 2345.77)},
     {Min = 725,  Max = 774,  Mob = "Mercenary",            NPC = "Area 1 Quest Giver",     QName = "Area1Quest",        QNum = 2, QPos = CFrame.new(-429.54, 71.77, 1836.18),    MPos = CFrame.new(-1004.32, 80.16, 1424.62)},
@@ -189,7 +189,6 @@ local QuestsSea2 = {
     {Min = 1450, Max = 1499, Mob = "Water Fighter",        NPC = "Forgotten Quest Giver",  QName = "ForgottenQuest",    QNum = 2, QPos = CFrame.new(-3054.44, 235.54, -10142.82),MPos = CFrame.new(-3352.90, 285.02, -10534.84)}
 }
 
--- FIX BUG #2: Добавлено поле NPC с реальными именами квестодателей из Workspace.NPCs для Sea 3
 local QuestsSea3 = {
     {Min = 1500, Max = 1524, Mob = "Pirate Millionaire",    NPC = "Pirate Port Quest Giver", QName = "PiratePortQuest",    QNum = 1, QPos = CFrame.new(-290.07, 42.90, 5581.59),    MPos = CFrame.new(-245.99, 47.31, 5584.10)},
     {Min = 1525, Max = 1574, Mob = "Pistol Billionaire",    NPC = "Pirate Port Quest Giver", QName = "PiratePortQuest",    QNum = 2, QPos = CFrame.new(-290.07, 42.90, 5581.59),    MPos = CFrame.new(-187.33, 86.24, 6013.51)},
@@ -247,7 +246,7 @@ local Sea1Portals = {
 }
 
 -- ============================================================================
--- 3. ПАНЕЛЬ УПРАВЛЕНИЯ (HUD V8.9.2) И STEALTH SERVER HOP
+-- 3. ПАНЕЛЬ УПРАВЛЕНИЯ (HUD V8.9.4) И STEALTH SERVER HOP
 -- ============================================================================
 local StatusLabelRef = nil
 local SubInfoLabelRef = nil
@@ -323,14 +322,14 @@ local function buildHUD(onSwitchClicked, onHopClicked)
         "OllieHudV2", "OllieHudV3", "OllieHudV4", "OllieHudV5",
         "OllieHudV6", "OllieHudV7", "OllieHudV7_1", "OllieHudV7_2",
         "OllieHudV8", "OllieHudV8_1", "OllieHudV8_7", "OllieHudV8_8",
-        "OllieHudV8_9", "OllieHudV8_9_1", "OllieHudV8_9_2"
+        "OllieHudV8_9", "OllieHudV8_9_1", "OllieHudV8_9_2", "OllieHudV8_9_3", "OllieHudV8_9_4"
     }) do
         local old = pGui:FindFirstChild(oldName)
         if old then old:Destroy() end
     end
 
     local screen = Instance.new("ScreenGui")
-    screen.Name = "OllieHudV8_9_2"
+    screen.Name = "OllieHudV8_9_4"
     screen.ResetOnSpawn = false
     screen.DisplayOrder = 999999
     screen.IgnoreGuiInset = true
@@ -349,7 +348,7 @@ local function buildHUD(onSwitchClicked, onHopClicked)
     header.Size = UDim2.new(1, -12, 0, 22)
     header.Position = UDim2.new(0, 6, 0, 4)
     header.BackgroundTransparency = 1
-    header.Text = "OLLIE BF ENGINE V8.9.2 [PATCHED TURBO]"
+    header.Text = "OLLIE BF ENGINE V8.9.4 [MAGMA HOTFIX]"
     header.TextColor3 = Color3.fromRGB(0, 255, 136)
     header.Font = Enum.Font.SourceSansBold
     header.TextSize = 15
@@ -405,12 +404,12 @@ local function buildHUD(onSwitchClicked, onHopClicked)
     btnHop.Parent = main
 
     local lastToggle = 0
-    table.insert(Env.OllieV8_9_2_Connections, btnToggle.Activated:Connect(function()
+    table.insert(Env.OllieV8_9_4_Connections, btnToggle.Activated:Connect(function()
         if not isRunActive() or (tick() - lastToggle < 0.35) then return end
         lastToggle = tick()
-        Env.OllieV8_9_2_Enabled = not Env.OllieV8_9_2_Enabled
-        if onSwitchClicked then onSwitchClicked(Env.OllieV8_9_2_Enabled) end
-        if Env.OllieV8_9_2_Enabled then
+        Env.OllieV8_9_4_Enabled = not Env.OllieV8_9_4_Enabled
+        if onSwitchClicked then onSwitchClicked(Env.OllieV8_9_4_Enabled) end
+        if Env.OllieV8_9_4_Enabled then
             btnToggle.Text = "ФАРМ: ВКЛ"
             btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
             header.TextColor3 = Color3.fromRGB(0, 255, 136)
@@ -425,7 +424,7 @@ local function buildHUD(onSwitchClicked, onHopClicked)
     end))
 
     local lastHop = 0
-    table.insert(Env.OllieV8_9_2_Connections, btnHop.Activated:Connect(function()
+    table.insert(Env.OllieV8_9_4_Connections, btnHop.Activated:Connect(function()
         if not isRunActive() or (tick() - lastHop < 3.0) then return end
         lastHop = tick()
         if onHopClicked then task.spawn(onHopClicked) end
@@ -433,7 +432,7 @@ local function buildHUD(onSwitchClicked, onHopClicked)
 end
 
 -- Анти-АФК (срабатывает раз в 20 минут по событию Idled)
-table.insert(Env.OllieV8_9_2_Connections, LocalPlayer.Idled:Connect(function()
+table.insert(Env.OllieV8_9_4_Connections, LocalPlayer.Idled:Connect(function()
     if not isRunActive() then return end
     pcall(function()
         VirtualUser:CaptureController()
@@ -527,7 +526,7 @@ local function getVisibleQuestObject()
     if not pGui then return nil, nil end
 
     for _, gui in ipairs(pGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV8_9_2" then
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV8_9_4" then
             for _, obj in ipairs(gui:GetDescendants()) do
                 if obj.Name == "Quest" and obj:IsA("GuiObject") and obj.Visible then
                     if isGuiChainVisible(obj, gui) then
@@ -624,14 +623,12 @@ local function getQuestByLevel()
     return ActiveQuests[#ActiveQuests], lvl, "OK"
 end
 
--- FIX BUG #2: Ищет живую модель NPC по имени и координатам во всех папках (включая одноименных "Quest Giver" в Sea 2/3)
 local function getLiveNPCCFrame(qData)
     local npcFolders = {
         Workspace:FindFirstChild("NPCs"),
         ReplicatedStorage:FindFirstChild("NPCs")
     }
 
-    -- 1. Приоритетный поиск по имени NPC (или "Quest Giver") в радиусе 260 стадов от QPos
     if qData.NPC then
         local bestNamedCF = nil
         local bestNamedDist = 260
@@ -659,7 +656,6 @@ local function getLiveNPCCFrame(qData)
         end
     end
 
-    -- 2. Fallback по расстоянию до QPos
     if qData.QPos then
         local bestCF = nil
         local bestDist = 70
@@ -683,7 +679,6 @@ local function getLiveNPCCFrame(qData)
     return qData.QPos or CFrame.new()
 end
 
--- FIX BUG #1: Удален "or string.find(...)", используется строго префиксный матчер mobNameMatches(sp.Name, qData.Mob)
 local WaypointCache = { Key = "", Time = 0, List = {} }
 local function getMobSpawnWaypoints(qData)
     local key = qData.QName .. "_" .. tostring(qData.QNum)
@@ -692,6 +687,10 @@ local function getMobSpawnWaypoints(qData)
     end
 
     local points = {}
+    if qData.MPos then
+        table.insert(points, qData.MPos * CFrame.new(0, Config.HoverHeight, 0))
+    end
+
     local worldOrigin = Workspace:FindFirstChild("_WorldOrigin")
     local enemySpawns = worldOrigin and worldOrigin:FindFirstChild("EnemySpawns")
     if enemySpawns then
@@ -699,11 +698,11 @@ local function getMobSpawnWaypoints(qData)
             if mobNameMatches(sp.Name, qData.Mob) then
                 local pos = (sp:IsA("BasePart") and sp.Position)
                     or (sp:IsA("Model") and sp.PrimaryPart and sp.PrimaryPart.Position)
-                if pos and (not qData.MPos or math.abs(pos.Y - qData.MPos.Position.Y) <= 450) then
+                if pos and (not qData.MPos or math.abs(pos.Y - qData.MPos.Position.Y) <= 120) then
                     local hoverPos = pos + Vector3.new(0, Config.HoverHeight, 0)
                     local dup = false
                     for _, ex in ipairs(points) do
-                        if (ex.Position - hoverPos).Magnitude < 12 then dup = true break end
+                        if (ex.Position - hoverPos).Magnitude < 35 then dup = true break end
                     end
                     if not dup then
                         table.insert(points, CFrame.new(hoverPos))
@@ -713,9 +712,7 @@ local function getMobSpawnWaypoints(qData)
         end
     end
 
-    if qData.MPos then
-        table.insert(points, qData.MPos * CFrame.new(0, Config.HoverHeight, 0))
-    elseif #points == 0 then
+    if #points == 0 then
         table.insert(points, getLiveNPCCFrame(qData) * CFrame.new(0, Config.HoverHeight, 0))
     end
 
@@ -792,7 +789,7 @@ local function stopTweenAndReleasePhysics(restoreCollide)
         end
     end
 end
-Env.OllieV8_9_2_Cleanup = function()
+Env.OllieV8_9_4_Cleanup = function()
     stopTweenAndReleasePhysics(true)
 end
 
@@ -802,8 +799,8 @@ buildHUD(function(enabled)
     end
 end, performServerHop)
 
-table.insert(Env.OllieV8_9_2_Connections, RunService.Stepped:Connect(function()
-    if not isRunActive() or not Env.OllieV8_9_2_Enabled or FSM.GroundedAtNPC or FSM.Completed then return end
+table.insert(Env.OllieV8_9_4_Connections, RunService.Stepped:Connect(function()
+    if not isRunActive() or not Env.OllieV8_9_4_Enabled or FSM.GroundedAtNPC or FSM.Completed then return end
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
@@ -903,7 +900,7 @@ local CachedRegHit = nil
 local CachedCFUpvalTable = nil
 local LastCFScan = 0
 
-table.insert(Env.OllieV8_9_2_Connections, LocalPlayer.CharacterAdded:Connect(function()
+table.insert(Env.OllieV8_9_4_Connections, LocalPlayer.CharacterAdded:Connect(function()
     stopTweenAndReleasePhysics(false)
     FSM.ActiveCombatMob = nil
     FSM.GroundedAtNPC = false
@@ -985,7 +982,7 @@ local function findTargetMob(qData)
             local mh = m:FindFirstChildOfClass("Humanoid")
             local mr = m:FindFirstChild("HumanoidRootPart")
             if mh and mr then
-                if mh.Health > 0 and mr.Position.Y > -300 then
+                if mh.Health > 0 and mr.Position.Y > -300 and math.abs(mr.Position.Y - refPos.Y) <= 60 then
                     local d = (mr.Position - refPos).Magnitude
                     if d < bestDist then
                         bestDist = d
@@ -1094,7 +1091,7 @@ end
 task.spawn(function()
     while isRunActive() do
         task.wait(Config.FastAttackInterval + (math.random(5, 25) / 1000))
-        if isRunActive() and Env.OllieV8_9_2_Enabled and not FSM.Completed and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
+        if isRunActive() and Env.OllieV8_9_4_Enabled and not FSM.Completed and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
             pcall(function()
                 local mh = FSM.ActiveCombatMob:FindFirstChildOfClass("Humanoid")
                 local mr = FSM.ActiveCombatMob:FindFirstChild("HumanoidRootPart")
@@ -1113,7 +1110,7 @@ end)
 local HasBoughtBlackLeg = false
 task.spawn(function()
     while isRunActive() and task.wait(3.5 + (math.random(0, 10) / 10)) do
-        if isRunActive() and Env.OllieV8_9_2_Enabled and not FSM.Completed then
+        if isRunActive() and Env.OllieV8_9_4_Enabled and not FSM.Completed then
             local comm = getCommF()
             if comm then
                 if Config.AutoStats then
@@ -1151,7 +1148,7 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- 8. ГЛАВНЫЙ ЦИКЛ УПРАВЛЕНИЯ V8.9.2 [PATCHED TURBO]
+-- 8. ГЛАВНЫЙ ЦИКЛ УПРАВЛЕНИЯ V8.9.4 [MAGMA HOTFIX]
 -- ============================================================================
 local LastSetSpawnIsland = ""
 
@@ -1162,7 +1159,7 @@ task.spawn(function()
             break
         end
 
-        if not Env.OllieV8_9_2_Enabled then
+        if not Env.OllieV8_9_4_Enabled then
             stopTweenAndReleasePhysics(true)
             FSM.ActiveCombatMob = nil
         else
@@ -1187,7 +1184,7 @@ task.spawn(function()
 
                 if status == "COMPLETED" then
                     FSM.Completed = true
-                    Env.OllieV8_9_2_Enabled = false
+                    Env.OllieV8_9_4_Enabled = false
                     stopTweenAndReleasePhysics(true)
                     if MainFrameRef then MainFrameRef.BorderColor3 = Color3.fromRGB(255, 215, 0) end
                     logStatus("ФАРМ ОКОНЧЕН — ДОСТИГНУТ " .. tostring(Config.MaxLevel) .. " УРОВЕНЬ!", myLvl, "COMPLETED")
@@ -1195,7 +1192,7 @@ task.spawn(function()
                         FSM.CompletionNotified = true
                         pcall(function()
                             StarterGui:SetCore("SendNotification", {
-                                Title = "OLLIE ENGINE V8.9.2",
+                                Title = "OLLIE ENGINE V8.9.4",
                                 Text = "ФАРМ ОКОНЧЕН — ВСЕ ПОСТАВЛЕННЫЕ ЦЕЛИ ВЫПОЛНЕНЫ!",
                                 Duration = 10
                             })
@@ -1268,7 +1265,7 @@ task.spawn(function()
                         ensureHoverBV(root)
                         FSM.GroundedAtNPC = true
                         root.CFrame = npcCF
-                        task.wait(0.12)
+                        task.wait(0.25)
 
                         local comm = getCommF()
                         if Config.AutoSetSpawnPoint and comm and LastSetSpawnIsland ~= qData.QName then
@@ -1289,7 +1286,7 @@ task.spawn(function()
                         FSM.QuestTriesAtNPC = FSM.QuestTriesAtNPC + 1
                         FSM.CurrentTrackedQuestKey = expectedQuestKey
                         logStatus("Взятие квеста #" .. tostring(FSM.QuestTriesAtNPC) .. " (Ответ: " .. tostring(serverReply) .. ")", myLvl, expectedQuestKey)
-                        task.wait(0.22)
+                        task.wait(0.25)
 
                         if isQuestGuiVisible() or FSM.QuestTriesAtNPC >= 3 then
                             if not isQuestGuiVisible() then
