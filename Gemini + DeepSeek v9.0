@@ -1,7 +1,7 @@
 -- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V9.0 - MULTI-BOT FARM SYSTEM & TURBO MONOLITH ]] --
 -- Language: Lua 5.1 / Luau | Runtime: Delta / Project Real / Windows & Android Executors
 -- Изменения в V9.0 [MULTI-BOT SYSTEM]:
---   1. В самый верх таблицы Config добавлен массив Config.MyBotNames со списком 37 ботов.
+--   1. В самый верх таблицы Config добавлен обновленный массив Config.MyBotNames со списком 43 ботов.
 --   2. Добавлена функция checkBotCollision(), проверяющая присутствие других своих ботов на сервере.
 --   3. В начале главного цикла добавлена реакция на коллизию: вывод статуса в HUD,
 --      случайная задержка math.random(3, 7) сек, вызов performServerHop() и ожидание 15 сек.
@@ -89,15 +89,16 @@ end)
 -- ============================================================================
 local Config = {
     MyBotNames = {
-        "Kipbl4383", "Warsn2827", "Irong4348", "Embenova9422", "Plixfe0798",
-        "Kipfro4287", "Kipberry6625", "Thisx5974", "Bubblewrench8304", "Plikco1460",
-        "Leezb3388", "Ixfli4982", "Thisneed7456", "Plikfu4166", "Plikcr7505",
-        "Warnee4585", "Leezga1177", "Dosneed4051", "Wikkbyt3361", "Shadoch7151",
-        "Plikblaz7744", "Volts3496", "Neonblaz7915", "Hronba7493", "Scout_Horizon9869",
-        "LethalOsprey_7709397", "OrcaLion_8964544512", "GlitchAlpha068742203",
-        "TinyCamel67261513", "AngryGlass806140886", "BronzeMagnet17069",
-        "WaveQuad5216828300", "Eerie_Commander25848", "Lively_Commander0253",
-        "ArdentHydra71403", "Kinetic_Jet36130", "Main_Lynx18190513887"
+        "pearleyits", "rykermolten00", "w1zard_football2011", "ra1nbowcloud80", "dream_cat89157",
+        "dr1p_cougar01", "arcane_kraken13", "rain8owdirE0", "c1utchhyolo1", "frediewarden20",
+        "cei1sixseven", "roblox_phantasm2011", "sparrowwfootball", "l1nacosmo93", "titanshadow2008",
+        "lion_fredie260187", "judythnocap21", "cobraaboulder", "real_stellarr1192", "demarionn_lowkey966",
+        "thewhisper30811", "primemoon7849", "fOotball_monarch04", "ethereal_cap546", "appleofficial200769",
+        "missiexx98", "crin9ewi1d5", "teressa_blitz5", "sigmasylvania19", "yuridiaClaw9656",
+        "Scout_Horizon9869", "LethalOsprey_7709397", "OrcaLion_8964544512", "GlitchAlpha068742203",
+        "TinyCamel67261513", "AngryGlass806140886", "BronzeMagnet17069", "WaveQuad5216828300",
+        "Eerie_Commander25848", "Lively_Commander0253", "ArdentHydra71403", "Kinetic_Jet36130",
+        "Main_Lynx18190513887"
     },
     MaxLevel = 3000,            -- Потолок прокачки (Sea 1 -> Sea 2 -> Sea 3)
     StopOnGoalCompleted = true,
