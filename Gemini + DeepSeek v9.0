@@ -1,0 +1,1375 @@
+-- [[ OLLIE BLOX FRUITS AUTO-FARM ENGINE V9.0 - MULTI-BOT FARM SYSTEM & TURBO MONOLITH ]] --
+-- Language: Lua 5.1 / Luau | Runtime: Delta / Project Real / Windows & Android Executors
+-- Изменения в V9.0 [MULTI-BOT SYSTEM]:
+--   1. В самый верх таблицы Config добавлен массив Config.MyBotNames со списком 37 ботов.
+--   2. Добавлена функция checkBotCollision(), проверяющая присутствие других своих ботов на сервере.
+--   3. В начале главного цикла добавлена реакция на коллизию: вывод статуса в HUD,
+--      случайная задержка math.random(3, 7) сек, вызов performServerHop() и ожидание 15 сек.
+--   4. Все идентификаторы окружения, очистка потоков, HUD и уведомления обновлены до V9.0.
+--   5. Вся боевая логика, таблицы квестов, фикс высоты Магмы и проверка Y <= 60 из V8.9.4 сохранены.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local TeleportService = game:GetService("TeleportService")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.15)
+    LocalPlayer = Players.LocalPlayer
+end
+
+math.randomseed((LocalPlayer.UserId % 1000000) + math.floor((os.clock() % 1) * 1000000) + os.time())
+for _ = 1, 5 do math.random() end
+
+-- ============================================================================
+-- 0. ИЗОЛЯЦИЯ ЗАПУСКОВ И ГАРАНТИРОВАННАЯ ОЧИСТКА СТАРЫХ ПОТОКОВ (V1 - V9.0)
+-- ============================================================================
+local Env = (getgenv and getgenv()) or _G
+for i = 1, 9 do
+    Env["OllieV" .. i .. "_Running"] = false
+    Env["OllieV" .. i .. "_Enabled"] = false
+end
+for _, subVer in ipairs({"8_1", "8_7", "8_8", "8_9", "8_9_1", "8_9_2", "8_9_3", "8_9_4", "9_0"}) do
+    Env["OllieV" .. subVer .. "_Running"] = false
+    Env["OllieV" .. subVer .. "_Enabled"] = false
+end
+
+local MyRunId = (tonumber(Env.OllieV9_0_RunId) or 0) + 1
+Env.OllieV9_0_RunId = MyRunId
+Env.OllieV9_0_Running = true
+Env.OllieV9_0_Enabled = true
+
+for _, cleanupKey in ipairs({
+    "OllieV8_8_Cleanup", "OllieV8_9_Cleanup",
+    "OllieV8_9_1_Cleanup", "OllieV8_9_2_Cleanup",
+    "OllieV8_9_3_Cleanup", "OllieV8_9_4_Cleanup", "OllieV9_0_Cleanup"
+}) do
+    if type(Env[cleanupKey]) == "function" then
+        pcall(Env[cleanupKey])
+    end
+end
+
+for _, connKey in ipairs({
+    "OllieV6_Connections", "OllieV7_Connections",
+    "OllieV8_Connections", "OllieV8_1_Connections",
+    "OllieV8_7_Connections", "OllieV8_8_Connections",
+    "OllieV8_9_Connections", "OllieV8_9_1_Connections",
+    "OllieV8_9_2_Connections", "OllieV8_9_3_Connections",
+    "OllieV8_9_4_Connections", "OllieV9_0_Connections"
+}) do
+    if type(Env[connKey]) == "table" then
+        for _, conn in ipairs(Env[connKey]) do
+            pcall(function()
+                if conn and conn.Connected then conn:Disconnect() end
+            end)
+        end
+    end
+end
+Env.OllieV9_0_Connections = {}
+
+local function isRunActive()
+    return Env.OllieV9_0_Running == true and Env.OllieV9_0_RunId == MyRunId
+end
+
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "OLLIE ENGINE V9.0 [MULTI-BOT]",
+        Text = "Запуск V9.0: Multi-Bot Anti-Collision + Турбо-фарм активны!",
+        Duration = 5
+    })
+end)
+
+-- ============================================================================
+-- 1. КОНФИГУРАЦИЯ V9.0 [MULTI-BOT FARM SYSTEM]
+-- ============================================================================
+local Config = {
+    MyBotNames = {
+        "Kipbl4383", "Warsn2827", "Irong4348", "Embenova9422", "Plixfe0798",
+        "Kipfro4287", "Kipberry6625", "Thisx5974", "Bubblewrench8304", "Plikco1460",
+        "Leezb3388", "Ixfli4982", "Thisneed7456", "Plikfu4166", "Plikcr7505",
+        "Warnee4585", "Leezga1177", "Dosneed4051", "Wikkbyt3361", "Shadoch7151",
+        "Plikblaz7744", "Volts3496", "Neonblaz7915", "Hronba7493", "Scout_Horizon9869",
+        "LethalOsprey_7709397", "OrcaLion_8964544512", "GlitchAlpha068742203",
+        "TinyCamel67261513", "AngryGlass806140886", "BronzeMagnet17069",
+        "WaveQuad5216828300", "Eerie_Commander25848", "Lively_Commander0253",
+        "ArdentHydra71403", "Kinetic_Jet36130", "Main_Lynx18190513887"
+    },
+    MaxLevel = 3000,            -- Потолок прокачки (Sea 1 -> Sea 2 -> Sea 3)
+    StopOnGoalCompleted = true,
+    AutoRedeemCodes = true,     -- Плавный ввод промокодов 2x EXP (при LVL <= 40)
+    AutoStats = true,           -- Авто-прокачка Melee (65%) и Defense (35%)
+    AutoBuyBlackLeg = true,     -- Авто-покупка боевого стиля Black Leg за $150k
+    AutoSetSpawnPoint = true,   -- Ставить Home Point на текущем острове
+    AutoRollFruit = false,      -- Выключено (сохраняет миллионы Beli)
+    BringMobs = true,           -- Мгновенная упаковка пачки мобов под удар
+    WeaponType = "Melee",
+    FlightSpeed = 225,          -- Безопасный потолок скорости без резиновых откатов
+    LoopInterval = 0.08,        -- Быстрый шаг главного управляющего цикла
+    FastAttackInterval = 0.09,  -- Базовый интервал ударов 0.09 с (+ джиттер 0.005-0.025 с)
+    HoverHeight = 15.0,         -- Высота зависания над мобом в бою
+    AttackBackOffset = 2.0,     -- Горизонтальное смещение по Z
+    MobHitboxSize = 62,         -- Расширенный хитбокс живых мобов
+    MobPullEngageDist = 85,     -- Дистанция начала стяжки пачки на подлете
+    MobPullMaxRadius = 330,     -- Радиус захвата соседних мобов того же типа
+    TravelClearanceY = 85,      -- Крейсерская высота над водой при дальних перелетах
+    SafeModeEnabled = true,
+    LowHpThreshold = 0.32,      -- Порог ухода на отхил (32% HP)
+    RecoverHpThreshold = 0.82,  -- Порог возврата в бой (82% HP)
+    SafeSkyOffset = 180,
+    BusoRetryCooldown = 6.0,
+    SpawnPatrolInterval = 3.5,  -- Интервал патруля точек спавна
+    ServerHopCooldown = 180
+}
+
+local function checkBotCollision()
+    local myName = LocalPlayer.Name
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Name ~= myName then
+            for _, botName in ipairs(Config.MyBotNames) do
+                if plr.Name == botName then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local FSM = {
+    State = "INIT",
+    Completed = false,
+    CompletionNotified = false,
+    CurrentTrackedQuestKey = nil,
+    QuestTriesAtNPC = 0,
+    ForceFarmExpireTime = 0,
+    ActiveCombatMob = nil,
+    GroundedAtNPC = false,
+    IsHealingState = false,
+    SafeHealCFrame = nil,
+    LastBusoTry = 0,
+    PatrolIndex = 1,
+    LastPatrolSwitch = 0
+}
+
+-- ============================================================================
+-- 2. ТАБЛИЦЫ КВЕСТОВ ВСЕХ ТРЕХ МОРЕЙ (SEA 1, SEA 2, SEA 3 С ПОЛЕМ NPC)
+-- ============================================================================
+local PlaceId = game.PlaceId
+local Sea1_PlaceId = 2753915549
+local Sea2_PlaceId = 4442272183
+local Sea3_PlaceId = 7449423635
+
+local QuestsSea1 = {
+    {Min = 1,   Max = 9,   Mob = "Bandit",              NPC = "Bandit Quest Giver",    QName = "BanditQuest1",   QNum = 1, QPos = CFrame.new(1059.37, 16.36, 1549.25),   MPos = CFrame.new(1145.00, 17.00, 1634.00)},
+    {Min = 10,  Max = 14,  Mob = "Monkey",              NPC = "Adventurer",            QName = "JungleQuest",    QNum = 1, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1448.51, 67.85, 11.46)},
+    {Min = 15,  Max = 29,  Mob = "Gorilla",             NPC = "Adventurer",            QName = "JungleQuest",    QNum = 2, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1129.88, 40.46, -525.42)},
+    {Min = 30,  Max = 39,  Mob = "Pirate",              NPC = "Pirate Adventurer",     QName = "BuggyQuest1",    QNum = 1, QPos = CFrame.new(-1141.07, 4.10, 3831.54),   MPos = CFrame.new(-1103.51, 13.75, 3896.09)},
+    {Min = 40,  Max = 59,  Mob = "Brute",               NPC = "Pirate Adventurer",     QName = "BuggyQuest1",    QNum = 2, QPos = CFrame.new(-1141.07, 4.10, 3831.54),   MPos = CFrame.new(-1140.08, 14.80, 4322.92)},
+    {Min = 60,  Max = 74,  Mob = "Desert Bandit",       NPC = "Desert Adventurer",     QName = "DesertQuest",    QNum = 1, QPos = CFrame.new(894.48, 5.14, 4392.43),     MPos = CFrame.new(924.79, 6.44, 4481.58)},
+    {Min = 75,  Max = 89,  Mob = "Desert Officer",      NPC = "Desert Adventurer",     QName = "DesertQuest",    QNum = 2, QPos = CFrame.new(894.48, 5.14, 4392.43),     MPos = CFrame.new(1608.28, 8.61, 4371.00)},
+    {Min = 90,  Max = 99,  Mob = "Snow Bandit",         NPC = "Villager",              QName = "SnowQuest",      QNum = 1, QPos = CFrame.new(1389.74, 88.15, -1298.90),  MPos = CFrame.new(1354.34, 87.27, -1393.94)},
+    {Min = 100, Max = 119, Mob = "Snowman",             NPC = "Villager",              QName = "SnowQuest",      QNum = 2, QPos = CFrame.new(1389.74, 88.15, -1298.90),  MPos = CFrame.new(1201.64, 144.57, -1550.06)},
+    {Min = 120, Max = 149, Mob = "Chief Petty Officer", NPC = "Marine",                QName = "MarineQuest2",   QNum = 1, QPos = CFrame.new(-5039.58, 27.35, 4324.68),  MPos = CFrame.new(-4881.23, 22.65, 4273.75)},
+    {Min = 150, Max = 174, Mob = "Sky Bandit",          NPC = "Sky Adventurer",        QName = "SkyQuest",       QNum = 1, QPos = CFrame.new(-4839.53, 716.36, -2619.44), MPos = CFrame.new(-4953.20, 295.74, -2899.22)},
+    {Min = 175, Max = 189, Mob = "Dark Master",         NPC = "Sky Adventurer",        QName = "SkyQuest",       QNum = 2, QPos = CFrame.new(-4839.53, 716.36, -2619.44), MPos = CFrame.new(-5259.84, 391.39, -2229.03)},
+    {Min = 190, Max = 209, Mob = "Prisoner",            NPC = "Warden",                QName = "PrisonerQuest",  QNum = 1, QPos = CFrame.new(5308.93, 1.65, 475.12),     MPos = CFrame.new(5098.97, 8.50, 474.23)},
+    {Min = 210, Max = 249, Mob = "Dangerous Prisoner",  NPC = "Warden",                QName = "PrisonerQuest",  QNum = 2, QPos = CFrame.new(5308.93, 1.65, 475.12),     MPos = CFrame.new(5654.56, 15.63, 866.29)},
+    {Min = 250, Max = 274, Mob = "Toga Warrior",        NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1820.21, 51.68, -2740.66)},
+    {Min = 275, Max = 299, Mob = "Gladiator",           NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 2, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1292.83, 56.38, -3339.03)},
+    {Min = 300, Max = 324, Mob = "Military Soldier",    NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 1, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5411.16, 11.08, 8454.29)},
+    {Min = 325, Max = 374, Mob = "Military Spy",        NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 2, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5810.00, 14.50, 8835.00)},
+    {Min = 375, Max = 399, Mob = "Fishman Warrior",     NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 1, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(60878.30, 18.48, 1543.75)},
+    {Min = 400, Max = 449, Mob = "Fishman Commando",    NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 2, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(61922.63, 18.48, 1493.93)},
+    {Min = 450, Max = 474, Mob = "God's Guard",         NPC = "Mole",                  QName = "SkyExp1Quest",   QNum = 1, QPos = CFrame.new(-4721.88, 843.87, -1949.96), MPos = CFrame.new(-4710.04, 845.27, -1927.30)},
+    {Min = 475, Max = 524, Mob = "Shanda",              NPC = "SkyExp1",               QName = "SkyExp1Quest",   QNum = 2, QPos = CFrame.new(-7859.09, 5544.19, -381.47), MPos = CFrame.new(-7678.48, 5566.40, -497.21)},
+    {Min = 525, Max = 549, Mob = "Royal Squad",         NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 1, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7624.25, 5658.13, -1467.35)},
+    {Min = 550, Max = 624, Mob = "Royal Soldier",       NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 2, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7836.75, 5645.66, -1790.62)},
+    {Min = 625, Max = 649, Mob = "Galley Pirate",       NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 1, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5551.02, 78.90, 3930.41)},
+    {Min = 650, Max = 699, Mob = "Galley Captain",      NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 2, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5649.95, 38.53, 4936.26)}
+}
+
+local QuestsSea2 = {
+    {Min = 700,  Max = 724,  Mob = "Raider",               NPC = "Area 1 Quest Giver",     QName = "Area1Quest",        QNum = 1, QPos = CFrame.new(-429.54, 71.77, 1836.18),    MPos = CFrame.new(-728.32, 52.78, 2345.77)},
+    {Min = 725,  Max = 774,  Mob = "Mercenary",            NPC = "Area 1 Quest Giver",     QName = "Area1Quest",        QNum = 2, QPos = CFrame.new(-429.54, 71.77, 1836.18),    MPos = CFrame.new(-1004.32, 80.16, 1424.62)},
+    {Min = 775,  Max = 799,  Mob = "Swan Pirate",          NPC = "Area 2 Quest Giver",     QName = "Area2Quest",        QNum = 1, QPos = CFrame.new(638.44, 71.77, 918.28),      MPos = CFrame.new(1068.66, 137.61, 1322.11)},
+    {Min = 800,  Max = 874,  Mob = "Factory Staff",        NPC = "Area 2 Quest Giver",     QName = "Area2Quest",        QNum = 2, QPos = CFrame.new(638.44, 71.77, 918.28),      MPos = CFrame.new(73.08, 81.86, -27.47)},
+    {Min = 875,  Max = 899,  Mob = "Marine Lieutenant",    NPC = "Marine Quest Giver",     QName = "MarineQuest3",      QNum = 1, QPos = CFrame.new(-2440.80, 71.71, -3216.07),  MPos = CFrame.new(-2821.37, 75.90, -3070.09)},
+    {Min = 900,  Max = 949,  Mob = "Marine Captain",       NPC = "Marine Quest Giver",     QName = "MarineQuest3",      QNum = 2, QPos = CFrame.new(-2440.80, 71.71, -3216.07),  MPos = CFrame.new(-1861.23, 80.18, -3254.70)},
+    {Min = 950,  Max = 974,  Mob = "Zombie",               NPC = "Graveyard Quest Giver",  QName = "ZombieQuest",       QNum = 1, QPos = CFrame.new(-5497.06, 47.59, -795.24),   MPos = CFrame.new(-5657.78, 78.97, -928.69)},
+    {Min = 975,  Max = 999,  Mob = "Vampire",              NPC = "Graveyard Quest Giver",  QName = "ZombieQuest",       QNum = 2, QPos = CFrame.new(-5497.06, 47.59, -795.24),   MPos = CFrame.new(-6037.67, 32.18, -1340.66)},
+    {Min = 1000, Max = 1049, Mob = "Snow Trooper",         NPC = "Snow Quest Giver",       QName = "SnowMountainQuest", QNum = 1, QPos = CFrame.new(609.86, 400.12, -5372.26),   MPos = CFrame.new(549.15, 427.39, -5563.70)},
+    {Min = 1050, Max = 1099, Mob = "Winter Warrior",       NPC = "Snow Quest Giver",       QName = "SnowMountainQuest", QNum = 2, QPos = CFrame.new(609.86, 400.12, -5372.26),   MPos = CFrame.new(1142.75, 475.64, -5199.42)},
+    {Min = 1100, Max = 1124, Mob = "Lab Subordinate",      NPC = "Ice Quest Giver",        QName = "IceSideQuest",      QNum = 1, QPos = CFrame.new(-6064.07, 15.24, -4902.98),  MPos = CFrame.new(-5707.47, 15.95, -4513.39)},
+    {Min = 1125, Max = 1174, Mob = "Horned Warrior",       NPC = "Ice Quest Giver",        QName = "IceSideQuest",      QNum = 2, QPos = CFrame.new(-6064.07, 15.24, -4902.98),  MPos = CFrame.new(-6341.37, 15.95, -5723.16)},
+    {Min = 1175, Max = 1199, Mob = "Magma Ninja",          NPC = "Fire Quest Giver",       QName = "FireSideQuest",     QNum = 1, QPos = CFrame.new(-5428.03, 15.06, -5299.43),  MPos = CFrame.new(-5449.67, 76.66, -5808.20)},
+    {Min = 1200, Max = 1249, Mob = "Lava Pirate",          NPC = "Fire Quest Giver",       QName = "FireSideQuest",     QNum = 2, QPos = CFrame.new(-5428.03, 15.06, -5299.43),  MPos = CFrame.new(-5213.33, 49.74, -4701.45)},
+    {Min = 1250, Max = 1274, Mob = "Ship Deckhand",        NPC = "Rear Crew Quest Giver",  QName = "ShipQuest1",        QNum = 1, QPos = CFrame.new(1037.80, 125.09, 32911.60),  MPos = CFrame.new(1212.01, 150.79, 33059.25)},
+    {Min = 1275, Max = 1299, Mob = "Ship Engineer",        NPC = "Rear Crew Quest Giver",  QName = "ShipQuest1",        QNum = 2, QPos = CFrame.new(1037.80, 125.09, 32911.60),  MPos = CFrame.new(919.48, 43.54, 32779.97)},
+    {Min = 1300, Max = 1324, Mob = "Ship Steward",         NPC = "Front Crew Quest Giver", QName = "ShipQuest2",        QNum = 1, QPos = CFrame.new(968.80, 125.09, 33244.13),   MPos = CFrame.new(919.44, 129.59, 33436.04)},
+    {Min = 1325, Max = 1349, Mob = "Ship Officer",         NPC = "Front Crew Quest Giver", QName = "ShipQuest2",        QNum = 2, QPos = CFrame.new(968.80, 125.09, 33244.13),   MPos = CFrame.new(1036.02, 181.44, 33315.73)},
+    {Min = 1350, Max = 1374, Mob = "Arctic Warrior",       NPC = "Frost Quest Giver",      QName = "FrostQuest",        QNum = 1, QPos = CFrame.new(5667.66, 26.80, -6486.09),   MPos = CFrame.new(5966.25, 62.97, -6179.38)},
+    {Min = 1375, Max = 1424, Mob = "Snow Lurker",          NPC = "Frost Quest Giver",      QName = "FrostQuest",        QNum = 2, QPos = CFrame.new(5667.66, 26.80, -6486.09),   MPos = CFrame.new(5407.07, 69.19, -6880.88)},
+    {Min = 1425, Max = 1449, Mob = "Sea Soldier",          NPC = "Forgotten Quest Giver",  QName = "ForgottenQuest",    QNum = 1, QPos = CFrame.new(-3054.44, 235.54, -10142.82),MPos = CFrame.new(-3028.22, 64.67, -9775.43)},
+    {Min = 1450, Max = 1499, Mob = "Water Fighter",        NPC = "Forgotten Quest Giver",  QName = "ForgottenQuest",    QNum = 2, QPos = CFrame.new(-3054.44, 235.54, -10142.82),MPos = CFrame.new(-3352.90, 285.02, -10534.84)}
+}
+
+local QuestsSea3 = {
+    {Min = 1500, Max = 1524, Mob = "Pirate Millionaire",    NPC = "Pirate Port Quest Giver", QName = "PiratePortQuest",    QNum = 1, QPos = CFrame.new(-290.07, 42.90, 5581.59),    MPos = CFrame.new(-245.99, 47.31, 5584.10)},
+    {Min = 1525, Max = 1574, Mob = "Pistol Billionaire",    NPC = "Pirate Port Quest Giver", QName = "PiratePortQuest",    QNum = 2, QPos = CFrame.new(-290.07, 42.90, 5581.59),    MPos = CFrame.new(-187.33, 86.24, 6013.51)},
+    {Min = 1575, Max = 1599, Mob = "Dragon Crew Warrior",   NPC = "Dragon Crew Quest Giver", QName = "AmazonQuest",        QNum = 1, QPos = CFrame.new(5832.84, 51.69, -1101.52),   MPos = CFrame.new(6141.14, 51.35, -1340.74)},
+    {Min = 1600, Max = 1624, Mob = "Dragon Crew Archer",    NPC = "Dragon Crew Quest Giver", QName = "AmazonQuest",        QNum = 2, QPos = CFrame.new(5832.84, 51.69, -1101.52),   MPos = CFrame.new(6616.42, 441.77, 446.05)},
+    {Min = 1625, Max = 1649, Mob = "Female Islander",       NPC = "Amazon Quest Giver",      QName = "AmazonQuest2",       QNum = 1, QPos = CFrame.new(5448.86, 601.52, 751.13),    MPos = CFrame.new(4685.26, 735.81, 815.34)},
+    {Min = 1650, Max = 1699, Mob = "Giant Islander",        NPC = "Amazon Quest Giver",      QName = "AmazonQuest2",       QNum = 2, QPos = CFrame.new(5448.86, 601.52, 751.13),    MPos = CFrame.new(4729.09, 590.44, -36.98)},
+    {Min = 1700, Max = 1724, Mob = "Marine Commodore",      NPC = "Marine Tree Quest Giver", QName = "MarineTreeIsland",   QNum = 1, QPos = CFrame.new(2180.54, 27.82, -6741.55),   MPos = CFrame.new(2286.01, 73.13, -7159.81)},
+    {Min = 1725, Max = 1774, Mob = "Marine Rear Admiral",   NPC = "Marine Tree Quest Giver", QName = "MarineTreeIsland",   QNum = 2, QPos = CFrame.new(2180.54, 27.82, -6741.55),   MPos = CFrame.new(3656.77, 160.52, -7001.60)},
+    {Min = 1775, Max = 1799, Mob = "Fishman Raider",        NPC = "Turtle Adventurer",       QName = "DeepForestIsland3",  QNum = 1, QPos = CFrame.new(-10581.66, 330.87, -8761.19),MPos = CFrame.new(-10407.53, 331.76, -8368.52)},
+    {Min = 1800, Max = 1824, Mob = "Fishman Captain",       NPC = "Turtle Adventurer",       QName = "DeepForestIsland3",  QNum = 2, QPos = CFrame.new(-10581.66, 330.87, -8761.19),MPos = CFrame.new(-10994.70, 352.38, -9002.11)},
+    {Min = 1825, Max = 1849, Mob = "Forest Pirate",         NPC = "Deep Forest Quest Giver", QName = "DeepForestIsland",   QNum = 1, QPos = CFrame.new(-13234.04, 331.49, -7625.40),MPos = CFrame.new(-13479.40, 332.40, -7769.58)},
+    {Min = 1850, Max = 1899, Mob = "Mythological Pirate",   NPC = "Deep Forest Quest Giver", QName = "DeepForestIsland",   QNum = 2, QPos = CFrame.new(-13234.04, 331.49, -7625.40),MPos = CFrame.new(-13680.61, 501.08, -6991.19)},
+    {Min = 1900, Max = 1924, Mob = "Jungle Pirate",         NPC = "Deep Forest Area 2 Quest Giver", QName = "DeepForestIsland2", QNum = 1, QPos = CFrame.new(-12680.38, 389.97, -9902.02), MPos = CFrame.new(-12256.16, 331.74, -10485.84)},
+    {Min = 1925, Max = 1974, Mob = "Musketeer Pirate",      NPC = "Deep Forest Area 2 Quest Giver", QName = "DeepForestIsland2", QNum = 2, QPos = CFrame.new(-12680.38, 389.97, -9902.02), MPos = CFrame.new(-13457.90, 391.55, -9859.18)},
+    {Min = 1975, Max = 1999, Mob = "Reborn Skeleton",       NPC = "Haunted Castle Quest Giver 1", QName = "HauntedQuest1", QNum = 1, QPos = CFrame.new(-9479.22, 141.22, 5566.09),  MPos = CFrame.new(-8763.72, 165.72, 6159.86)},
+    {Min = 2000, Max = 2024, Mob = "Living Zombie",         NPC = "Haunted Castle Quest Giver 1", QName = "HauntedQuest1", QNum = 2, QPos = CFrame.new(-9479.22, 141.22, 5566.09),  MPos = CFrame.new(-10144.13, 138.63, 5838.09)},
+    {Min = 2025, Max = 2049, Mob = "Demonic Soul",          NPC = "Haunted Castle Quest Giver 2", QName = "HauntedQuest2", QNum = 1, QPos = CFrame.new(-9516.99, 172.02, 6078.47),  MPos = CFrame.new(-9505.87, 172.10, 6158.99)},
+    {Min = 2050, Max = 2074, Mob = "Posessed Mummy",        NPC = "Haunted Castle Quest Giver 2", QName = "HauntedQuest2", QNum = 2, QPos = CFrame.new(-9516.99, 172.02, 6078.47),  MPos = CFrame.new(-9582.02, 6.25, 6205.48)},
+    {Min = 2075, Max = 2099, Mob = "Peanut Scout",          NPC = "Peanut Quest Giver",      QName = "NutsIslandQuest",    QNum = 1, QPos = CFrame.new(-2104.39, 38.10, -10194.22), MPos = CFrame.new(-2143.24, 47.72, -10029.99)},
+    {Min = 2100, Max = 2124, Mob = "Peanut President",      NPC = "Peanut Quest Giver",      QName = "NutsIslandQuest",    QNum = 2, QPos = CFrame.new(-2104.39, 38.10, -10194.22), MPos = CFrame.new(-1859.35, 38.10, -10422.43)},
+    {Min = 2125, Max = 2149, Mob = "Ice Cream Chef",        NPC = "Ice Cream Quest Giver",   QName = "IceCreamIslandQuest",QNum = 1, QPos = CFrame.new(-820.65, 65.82, -10965.80),  MPos = CFrame.new(-641.89, 126.92, -11062.88)},
+    {Min = 2150, Max = 2199, Mob = "Ice Cream Commander",   NPC = "Ice Cream Quest Giver",   QName = "IceCreamIslandQuest",QNum = 2, QPos = CFrame.new(-820.65, 65.82, -10965.80),  MPos = CFrame.new(-558.06, 112.05, -11290.77)},
+    {Min = 2200, Max = 2224, Mob = "Cookie Crafter",        NPC = "Cake Quest Giver 1",      QName = "CakeQuest1",         QNum = 1, QPos = CFrame.new(-2021.32, 37.80, -12028.73), MPos = CFrame.new(-2374.90, 37.80, -12125.31)},
+    {Min = 2225, Max = 2249, Mob = "Cake Guard",            NPC = "Cake Quest Giver 1",      QName = "CakeQuest1",         QNum = 2, QPos = CFrame.new(-2021.32, 37.80, -12028.73), MPos = CFrame.new(-1598.31, 43.77, -12244.58)},
+    {Min = 2250, Max = 2274, Mob = "Baking Staff",          NPC = "Cake Quest Giver 2",      QName = "CakeQuest2",         QNum = 1, QPos = CFrame.new(-1927.92, 37.80, -12842.54), MPos = CFrame.new(-1887.81, 77.62, -12998.35)},
+    {Min = 2275, Max = 2299, Mob = "Head Baker",            NPC = "Cake Quest Giver 2",      QName = "CakeQuest2",         QNum = 2, QPos = CFrame.new(-1927.92, 37.80, -12842.54), MPos = CFrame.new(-2216.19, 82.88, -12869.29)},
+    {Min = 2300, Max = 2324, Mob = "Cocoa Warrior",         NPC = "Chocolate Quest Giver 1", QName = "ChocQuest1",         QNum = 1, QPos = CFrame.new(233.23, 29.88, -12201.23),   MPos = CFrame.new(-21.55, 80.57, -12352.39)},
+    {Min = 2325, Max = 2349, Mob = "Chocolate Bar Battler", NPC = "Chocolate Quest Giver 1", QName = "ChocQuest1",         QNum = 2, QPos = CFrame.new(233.23, 29.88, -12201.23),   MPos = CFrame.new(582.59, 77.19, -12463.16)},
+    {Min = 2350, Max = 2374, Mob = "Sweet Thief",           NPC = "Chocolate Quest Giver 2", QName = "ChocQuest2",         QNum = 1, QPos = CFrame.new(150.51, 30.69, -12774.50),   MPos = CFrame.new(165.19, 76.06, -12600.84)},
+    {Min = 2375, Max = 2399, Mob = "Candy Rebel",           NPC = "Chocolate Quest Giver 2", QName = "ChocQuest2",         QNum = 2, QPos = CFrame.new(150.51, 30.69, -12774.50),   MPos = CFrame.new(134.87, 77.25, -12876.55)},
+    {Min = 2400, Max = 2424, Mob = "Candy Pirate",          NPC = "Candy Pirate Quest Giver",QName = "CandyQuest1",        QNum = 1, QPos = CFrame.new(-1150.04, 20.38, -14446.33), MPos = CFrame.new(-1310.50, 26.02, -14562.40)},
+    {Min = 2425, Max = 2449, Mob = "Snow Demon",            NPC = "Candy Pirate Quest Giver",QName = "CandyQuest1",        QNum = 2, QPos = CFrame.new(-1150.04, 20.38, -14446.33), MPos = CFrame.new(-880.20, 71.25, -14538.61)},
+    {Min = 2450, Max = 2474, Mob = "Isle Outlaw",           NPC = "Tiki Quest Giver 1",      QName = "TikiQuest1",         QNum = 1, QPos = CFrame.new(-16547.75, 61.14, -173.41),  MPos = CFrame.new(-16442.81, 116.14, -264.46)},
+    {Min = 2475, Max = 2499, Mob = "Island Boy",            NPC = "Tiki Quest Giver 1",      QName = "TikiQuest1",         QNum = 2, QPos = CFrame.new(-16547.75, 61.14, -173.41),  MPos = CFrame.new(-16901.26, 84.07, -192.89)},
+    {Min = 2500, Max = 2524, Mob = "Sun-kissed Warrior",    NPC = "Tiki Quest Giver 2",      QName = "TikiQuest2",         QNum = 1, QPos = CFrame.new(-16539.08, 55.69, 1051.57),  MPos = CFrame.new(-16347.00, 64.08, 984.47)},
+    {Min = 2525, Max = 3000, Mob = "Isle Champion",         NPC = "Tiki Quest Giver 2",      QName = "TikiQuest2",         QNum = 2, QPos = CFrame.new(-16539.08, 55.69, 1051.57),  MPos = CFrame.new(-16641.68, 235.78, 1031.28)}
+}
+
+local ActiveQuests = QuestsSea1
+local CurrentSeaNum = 1
+if PlaceId == Sea2_PlaceId then
+    ActiveQuests = QuestsSea2
+    CurrentSeaNum = 2
+elseif PlaceId == Sea3_PlaceId then
+    ActiveQuests = QuestsSea3
+    CurrentSeaNum = 3
+end
+
+local Sea1Portals = {
+    FishmanInside  = Vector3.new(61163.8515625, 11.6796875, 1819.7841796875),
+    FishmanOutside = Vector3.new(3864.6884765625, 6.73695755, -1926.2141113),
+    SkyTemple      = Vector3.new(-4607.82275, 872.54248, -1667.55688),
+    SkyUpperYard   = Vector3.new(-7894.617675, 5547.14160, -380.291198)
+}
+
+-- ============================================================================
+-- 3. ПАНЕЛЬ УПРАВЛЕНИЯ (HUD V9.0) И STEALTH SERVER HOP
+-- ============================================================================
+local StatusLabelRef = nil
+local SubInfoLabelRef = nil
+local MainFrameRef = nil
+
+local function logStatus(msg, lvl, qName)
+    if not isRunActive() then return end
+    pcall(function()
+        if StatusLabelRef then
+            StatusLabelRef.Text = "Статус: " .. tostring(msg)
+        end
+        if SubInfoLabelRef and (lvl or qName) then
+            SubInfoLabelRef.Text = string.format(
+                "Sea %d | LVL: %s/%d | Квест: %s",
+                CurrentSeaNum,
+                tostring(lvl or "--"),
+                Config.MaxLevel,
+                tostring(qName or "--")
+            )
+        end
+    end)
+end
+
+local IsHopping = false
+local LastHopTime = 0
+
+local function performServerHop()
+    if IsHopping or not isRunActive() then return end
+    local sinceLast = tick() - LastHopTime
+    if LastHopTime > 0 and sinceLast < Config.ServerHopCooldown then
+        logStatus(string.format("Анти-Бан пауза на хоп: жди %d сек", math.ceil(Config.ServerHopCooldown - sinceLast)))
+        return
+    end
+
+    IsHopping = true
+    LastHopTime = tick()
+    logStatus("Безопасная смена сервера через игровой браузер...")
+
+    local hoppedViaBrowser = false
+    pcall(function()
+        local sb = ReplicatedStorage:FindFirstChild("__ServerBrowser")
+        if sb then
+            local page = math.random(2, 5)
+            local list = sb:InvokeServer(page)
+            if type(list) == "table" then
+                for jobId, info in pairs(list) do
+                    if tostring(jobId) ~= tostring(game.JobId) and type(info) == "table" and tonumber(info.Count) and info.Count >= 2 and info.Count <= 8 then
+                        hoppedViaBrowser = true
+                        sb:InvokeServer("teleport", jobId)
+                        break
+                    end
+                end
+            end
+        end
+    end)
+
+    if not hoppedViaBrowser then
+        task.wait(1.0)
+        pcall(function()
+            TeleportService:Teleport(PlaceId, LocalPlayer)
+        end)
+    end
+
+    task.wait(8)
+    IsHopping = false
+end
+
+local function buildHUD(onSwitchClicked, onHopClicked)
+    local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not pGui or not isRunActive() then return end
+
+    for _, oldName in ipairs({
+        "OllieHudV2", "OllieHudV3", "OllieHudV4", "OllieHudV5",
+        "OllieHudV6", "OllieHudV7", "OllieHudV7_1", "OllieHudV7_2",
+        "OllieHudV8", "OllieHudV8_1", "OllieHudV8_7", "OllieHudV8_8",
+        "OllieHudV8_9", "OllieHudV8_9_1", "OllieHudV8_9_2", "OllieHudV8_9_3",
+        "OllieHudV8_9_4", "OllieHudV9_0"
+    }) do
+        local old = pGui:FindFirstChild(oldName)
+        if old then old:Destroy() end
+    end
+
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "OllieHudV9_0"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 999999
+    screen.IgnoreGuiInset = true
+    screen.Parent = pGui
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 315, 0, 124)
+    main.Position = UDim2.new(0, 14, 0, 42)
+    main.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+    main.BorderSizePixel = 2
+    main.BorderColor3 = Color3.fromRGB(0, 255, 136)
+    main.Parent = screen
+    MainFrameRef = main
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, -12, 0, 22)
+    header.Position = UDim2.new(0, 6, 0, 4)
+    header.BackgroundTransparency = 1
+    header.Text = "OLLIE BF ENGINE V9.0 [MULTI-BOT]"
+    header.TextColor3 = Color3.fromRGB(0, 255, 136)
+    header.Font = Enum.Font.SourceSansBold
+    header.TextSize = 15
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = main
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -12, 0, 36)
+    status.Position = UDim2.new(0, 6, 0, 26)
+    status.BackgroundTransparency = 1
+    status.Text = "Статус: Инициализация..."
+    status.TextColor3 = Color3.fromRGB(240, 240, 240)
+    status.Font = Enum.Font.SourceSans
+    status.TextSize = 14
+    status.TextWrapped = true
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.TextYAlignment = Enum.TextYAlignment.Top
+    status.Parent = main
+    StatusLabelRef = status
+
+    local subinfo = Instance.new("TextLabel")
+    subinfo.Size = UDim2.new(1, -12, 0, 18)
+    subinfo.Position = UDim2.new(0, 6, 0, 64)
+    subinfo.BackgroundTransparency = 1
+    subinfo.Text = "Sea " .. tostring(CurrentSeaNum) .. " | LVL: -- | Квест: --"
+    subinfo.TextColor3 = Color3.fromRGB(175, 185, 205)
+    subinfo.Font = Enum.Font.SourceSans
+    subinfo.TextSize = 13
+    subinfo.TextXAlignment = Enum.TextXAlignment.Left
+    subinfo.Parent = main
+    SubInfoLabelRef = subinfo
+
+    local btnToggle = Instance.new("TextButton")
+    btnToggle.Size = UDim2.new(0, 142, 0, 28)
+    btnToggle.Position = UDim2.new(0, 8, 0, 88)
+    btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
+    btnToggle.BorderSizePixel = 0
+    btnToggle.Text = "ФАРМ: ВКЛ"
+    btnToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnToggle.Font = Enum.Font.SourceSansBold
+    btnToggle.TextSize = 14
+    btnToggle.Parent = main
+
+    local btnHop = Instance.new("TextButton")
+    btnHop.Size = UDim2.new(0, 142, 0, 28)
+    btnHop.Position = UDim2.new(0, 162, 0, 88)
+    btnHop.BackgroundColor3 = Color3.fromRGB(45, 100, 210)
+    btnHop.BorderSizePixel = 0
+    btnHop.Text = "СМЕНА СЕРВЕРА"
+    btnHop.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnHop.Font = Enum.Font.SourceSansBold
+    btnHop.TextSize = 14
+    btnHop.Parent = main
+
+    local lastToggle = 0
+    table.insert(Env.OllieV9_0_Connections, btnToggle.Activated:Connect(function()
+        if not isRunActive() or (tick() - lastToggle < 0.35) then return end
+        lastToggle = tick()
+        Env.OllieV9_0_Enabled = not Env.OllieV9_0_Enabled
+        if onSwitchClicked then onSwitchClicked(Env.OllieV9_0_Enabled) end
+        if Env.OllieV9_0_Enabled then
+            btnToggle.Text = "ФАРМ: ВКЛ"
+            btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
+            header.TextColor3 = Color3.fromRGB(0, 255, 136)
+            main.BorderColor3 = Color3.fromRGB(0, 255, 136)
+        else
+            btnToggle.Text = "ФАРМ: ПАУЗА"
+            btnToggle.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+            header.TextColor3 = Color3.fromRGB(255, 80, 80)
+            main.BorderColor3 = Color3.fromRGB(255, 80, 80)
+            status.Text = "Статус: На паузе"
+        end
+    end))
+
+    local lastHop = 0
+    table.insert(Env.OllieV9_0_Connections, btnHop.Activated:Connect(function()
+        if not isRunActive() or (tick() - lastHop < 3.0) then return end
+        lastHop = tick()
+        if onHopClicked then task.spawn(onHopClicked) end
+    end))
+end
+
+-- Анти-АФК (срабатывает раз в 20 минут по событию Idled)
+table.insert(Env.OllieV9_0_Connections, LocalPlayer.Idled:Connect(function()
+    if not isRunActive() then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        local camCF = (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame) or CFrame.new()
+        local rx, ry = math.random(350, 750), math.random(180, 420)
+        VirtualUser:Button2Down(Vector2.new(rx, ry), camCF)
+        task.wait(0.9 + (math.random(1, 5) / 10))
+        VirtualUser:Button2Up(Vector2.new(rx, ry), camCF)
+    end)
+end))
+
+-- ============================================================================
+-- 4. REMOTES, ВЫБОР КОМАНДЫ, КОДЫ И ПРОВЕРКА QUEST GUI
+-- ============================================================================
+local CachedCommF = nil
+local function getCommF()
+    if CachedCommF and CachedCommF.Parent then
+        return CachedCommF
+    end
+    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+    CachedCommF = rem and rem:FindFirstChild("CommF_")
+    return CachedCommF
+end
+
+local CodesRedeemed = false
+local function redeemAllExpCodesOnce()
+    if CodesRedeemed or not Config.AutoRedeemCodes then return end
+    CodesRedeemed = true
+    task.spawn(function()
+        task.wait(6.0 + math.random(1, 3))
+        local d = LocalPlayer:FindFirstChild("Data")
+        local lvl = d and d:FindFirstChild("Level") and d.Level.Value or 1
+        if lvl > 40 then return end
+
+        local rem = ReplicatedStorage:FindFirstChild("Remotes")
+        local redeemRemote = rem and rem:FindFirstChild("Redeem")
+        if not redeemRemote then return end
+
+        local expCodes = {
+            "Sub2CaptainMaui", "kittgaming", "Sub2Fer999",
+            "Enyu_is_Pro", "Magicbus", "JCWK", "Starcodeheo", "Bluxxy",
+            "SUB2GAMERROBOT_EXP1", "Sub2NoobMaster123", "Sub2OfficialNoobie",
+            "StrawHatMaine", "TantaiGaming", "Axiore", "TheGreatAce"
+        }
+        for _, code in ipairs(expCodes) do
+            if not isRunActive() then break end
+            pcall(function() redeemRemote:InvokeServer(code) end)
+            task.wait(1.1 + (math.random(0, 6) / 10))
+        end
+    end)
+end
+
+local function ensureTeam()
+    if not LocalPlayer.Team or (LocalPlayer.Team.Name ~= "Pirates" and LocalPlayer.Team.Name ~= "Marines") then
+        logStatus("Выбираем команду Pirates...")
+        pcall(function()
+            local comm = getCommF()
+            if comm then comm:InvokeServer("SetTeam", "Pirates") end
+        end)
+        task.wait(1.0)
+        return false
+    end
+    redeemAllExpCodesOnce()
+    return true
+end
+
+local CachedQuestObj = nil
+local function isGuiChainVisible(obj, rootGui)
+    if not obj or not obj.Parent or not obj:IsA("GuiObject") or not obj.Visible then
+        return false
+    end
+    local parent = obj.Parent
+    while parent and parent ~= rootGui do
+        if parent:IsA("GuiObject") and not parent.Visible then
+            return false
+        end
+        parent = parent.Parent
+    end
+    return rootGui and rootGui.Enabled == true
+end
+
+local function getVisibleQuestObject()
+    if CachedQuestObj and CachedQuestObj.Parent then
+        local screenGui = CachedQuestObj:FindFirstAncestorOfClass("ScreenGui")
+        if screenGui and isGuiChainVisible(CachedQuestObj, screenGui) then
+            return CachedQuestObj, screenGui
+        end
+    end
+
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return nil, nil end
+
+    for _, gui in ipairs(pGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV9_0" then
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if obj.Name == "Quest" and obj:IsA("GuiObject") and obj.Visible then
+                    if isGuiChainVisible(obj, gui) then
+                        CachedQuestObj = obj
+                        return obj, gui
+                    end
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function isQuestGuiVisible()
+    local qObj = getVisibleQuestObject()
+    return qObj ~= nil
+end
+
+local function isQuestTextDefinitelyStale(qData)
+    local qObj, rootGui = getVisibleQuestObject()
+    if not qObj then return false end
+
+    local parts = {}
+    for _, desc in ipairs(qObj:GetDescendants()) do
+        if desc:IsA("TextLabel") and isGuiChainVisible(desc, rootGui) and type(desc.Text) == "string" and #desc.Text > 0 then
+            table.insert(parts, string.lower(desc.Text))
+        end
+    end
+    if #parts == 0 then return false end
+    local fullText = table.concat(parts, " | ")
+
+    local targetMobLower = string.lower(qData.Mob)
+    if string.find(fullText, targetMobLower, 1, true) then
+        return false
+    end
+
+    for _, other in ipairs(ActiveQuests) do
+        if other.Mob ~= qData.Mob then
+            local otherLower = string.lower(other.Mob)
+            if #otherLower > 4 and string.find(fullText, otherLower, 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function clearBlockingDialogue()
+    pcall(function()
+        local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not pGui then return end
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                local dlg = gui:FindFirstChild("Dialogue", true)
+                if dlg and dlg:IsA("GuiObject") and dlg.Visible then
+                    local opt1 = dlg:FindFirstChild("Option1", true)
+                    if opt1 and firesignal then
+                        pcall(function() firesignal(opt1.Activated) end)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function mobNameMatches(enemyName, mobName)
+    local n, m = string.lower(enemyName), string.lower(mobName)
+    if string.sub(n, 1, #m) ~= m then return false end
+    local c = string.sub(n, #m + 1, #m + 1)
+    return c == "" or c == " " or c == "["
+end
+
+local function getQuestByLevel()
+    local d = LocalPlayer:FindFirstChild("Data")
+    local l = d and d:FindFirstChild("Level")
+    local lvl = l and math.floor(l.Value) or 1
+
+    if Config.StopOnGoalCompleted and lvl >= Config.MaxLevel then
+        return nil, lvl, "COMPLETED"
+    end
+
+    for i = 1, #ActiveQuests do
+        local q = ActiveQuests[i]
+        if lvl >= q.Min and lvl <= q.Max then
+            return q, lvl, "OK"
+        end
+    end
+
+    local maxInThisSea = ActiveQuests[#ActiveQuests].Max
+    if lvl > maxInThisSea then
+        return nil, lvl, "NEED_NEXT_SEA"
+    end
+
+    return ActiveQuests[#ActiveQuests], lvl, "OK"
+end
+
+local function getLiveNPCCFrame(qData)
+    local npcFolders = {
+        Workspace:FindFirstChild("NPCs"),
+        ReplicatedStorage:FindFirstChild("NPCs")
+    }
+
+    if qData.NPC then
+        local bestNamedCF = nil
+        local bestNamedDist = 260
+        for _, folder in ipairs(npcFolders) do
+            if folder then
+                for _, npc in ipairs(folder:GetChildren()) do
+                    if npc.Name == qData.NPC or npc.Name == "Quest Giver" then
+                        local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+                        if r then
+                            if not qData.QPos then
+                                return r.CFrame * CFrame.new(0, 0, -2.5)
+                            end
+                            local d = (r.Position - qData.QPos.Position).Magnitude
+                            if d < bestNamedDist then
+                                bestNamedDist = d
+                                bestNamedCF = r.CFrame * CFrame.new(0, 0, -2.5)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if bestNamedCF then
+            return bestNamedCF
+        end
+    end
+
+    if qData.QPos then
+        local bestCF = nil
+        local bestDist = 70
+        for _, folder in ipairs(npcFolders) do
+            if folder then
+                for _, npc in ipairs(folder:GetChildren()) do
+                    local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+                    if r then
+                        local d = (r.Position - qData.QPos.Position).Magnitude
+                        if d < bestDist then
+                            bestDist = d
+                            bestCF = r.CFrame * CFrame.new(0, 0, -2.5)
+                        end
+                    end
+                end
+            end
+        end
+        if bestCF then return bestCF end
+    end
+
+    return qData.QPos or CFrame.new()
+end
+
+local WaypointCache = { Key = "", Time = 0, List = {} }
+local function getMobSpawnWaypoints(qData)
+    local key = qData.QName .. "_" .. tostring(qData.QNum)
+    if WaypointCache.Key == key and (tick() - WaypointCache.Time) < 10.0 and #WaypointCache.List > 0 then
+        return WaypointCache.List
+    end
+
+    local points = {}
+    if qData.MPos then
+        table.insert(points, qData.MPos * CFrame.new(0, Config.HoverHeight, 0))
+    end
+
+    local worldOrigin = Workspace:FindFirstChild("_WorldOrigin")
+    local enemySpawns = worldOrigin and worldOrigin:FindFirstChild("EnemySpawns")
+    if enemySpawns then
+        for _, sp in ipairs(enemySpawns:GetChildren()) do
+            if mobNameMatches(sp.Name, qData.Mob) then
+                local pos = (sp:IsA("BasePart") and sp.Position)
+                    or (sp:IsA("Model") and sp.PrimaryPart and sp.PrimaryPart.Position)
+                if pos and (not qData.MPos or math.abs(pos.Y - qData.MPos.Position.Y) <= 120) then
+                    local hoverPos = pos + Vector3.new(0, Config.HoverHeight, 0)
+                    local dup = false
+                    for _, ex in ipairs(points) do
+                        if (ex.Position - hoverPos).Magnitude < 35 then dup = true break end
+                    end
+                    if not dup then
+                        table.insert(points, CFrame.new(hoverPos))
+                    end
+                end
+            end
+        end
+    end
+
+    if #points == 0 then
+        table.insert(points, getLiveNPCCFrame(qData) * CFrame.new(0, Config.HoverHeight, 0))
+    end
+
+    WaypointCache.Key = key
+    WaypointCache.Time = tick()
+    WaypointCache.List = points
+    return points
+end
+
+-- ============================================================================
+-- 5. ТУРБО TWEEN-КОНТРОЛЛЕР ПЕРЕМЕЩЕНИЯ (С ЗАЩИТОЙ ПОТОКА STREAMING)
+-- ============================================================================
+local ActiveTween = nil
+local LastTweenGoalPos = nil
+local LastStreamRequest = 0
+local StreamInFlight = false
+local LastPortalInvoke = 0
+local ZeroVec = Vector3.new(0, 0, 0)
+local HugeVec = Vector3.new(1e9, 1e9, 1e9)
+local DeadBoxVec = Vector3.new(1, 1, 1)
+
+local function requestStreamThrottled(targetPos, currentPos)
+    if not StreamInFlight and (tick() - LastStreamRequest) >= 1.1 then
+        LastStreamRequest = tick()
+        StreamInFlight = true
+        task.spawn(function()
+            pcall(function()
+                if currentPos and (targetPos - currentPos).Magnitude > 500 then
+                    local mid = currentPos + ((targetPos - currentPos).Unit * 420)
+                    LocalPlayer:RequestStreamAroundAsync(mid)
+                end
+                LocalPlayer:RequestStreamAroundAsync(targetPos)
+            end)
+            StreamInFlight = false
+        end)
+    end
+end
+
+local function ensureHoverBV(root)
+    if not root then return end
+    local bv = root:FindFirstChild("OllieBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "OllieBV"
+        bv.MaxForce = HugeVec
+        bv.Velocity = ZeroVec
+        bv.Parent = root
+    else
+        bv.Velocity = ZeroVec
+    end
+    pcall(function()
+        root.AssemblyLinearVelocity = ZeroVec
+        root.AssemblyAngularVelocity = ZeroVec
+    end)
+end
+
+local function stopTweenOnly()
+    if ActiveTween then
+        pcall(function() ActiveTween:Cancel() end)
+        ActiveTween = nil
+    end
+    LastTweenGoalPos = nil
+end
+
+local function stopTweenAndReleasePhysics(restoreCollide)
+    stopTweenOnly()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        local bv = root:FindFirstChild("OllieBV")
+        if bv then pcall(function() bv:Destroy() end) end
+        if restoreCollide then
+            pcall(function() root.CanCollide = true end)
+        end
+    end
+end
+Env.OllieV9_0_Cleanup = function()
+    stopTweenAndReleasePhysics(true)
+end
+
+buildHUD(function(enabled)
+    if not enabled then
+        stopTweenAndReleasePhysics(true)
+    end
+end, performServerHop)
+
+table.insert(Env.OllieV9_0_Connections, RunService.Stepped:Connect(function()
+    if not isRunActive() or not Env.OllieV9_0_Enabled or FSM.GroundedAtNPC or FSM.Completed then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if hum.Sit then hum.Sit = false end
+        if hum:GetState() == Enum.HumanoidStateType.Swimming then
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
+        end
+    end
+end))
+
+local function smartMoveTo(targetCFrame)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
+
+    local curPos = root.Position
+    local finalPos = targetCFrame.Position
+
+    if PlaceId == Sea1_PlaceId and (tick() - LastPortalInvoke) >= 4.0 then
+        local comm = getCommF()
+        if comm then
+            local portalVec = nil
+            if finalPos.X > 50000 and curPos.X < 40000 then
+                portalVec = Sea1Portals.FishmanInside
+            elseif finalPos.X < 40000 and curPos.X > 50000 then
+                portalVec = Sea1Portals.FishmanOutside
+            elseif finalPos.Y > 4500 and curPos.Y < 3500 then
+                portalVec = Sea1Portals.SkyUpperYard
+            elseif finalPos.Y > 680 and finalPos.Y < 1200 and (curPos - finalPos).Magnitude > 2200 then
+                portalVec = Sea1Portals.SkyTemple
+            end
+            if portalVec then
+                LastPortalInvoke = tick()
+                stopTweenOnly()
+                ensureHoverBV(root)
+                pcall(function() comm:InvokeServer("requestEntrance", portalVec) end)
+                task.wait(0.35)
+                return
+            end
+        end
+    end
+
+    ensureHoverBV(root)
+
+    local totalDist = (finalPos - curPos).Magnitude
+    local horizDist = Vector3.new(finalPos.X - curPos.X, 0, finalPos.Z - curPos.Z).Magnitude
+
+    if totalDist > 120 then
+        requestStreamThrottled(finalPos, curPos)
+    end
+
+    if totalDist <= 5.5 then
+        stopTweenOnly()
+        root.CFrame = targetCFrame
+        return
+    end
+
+    local waypointPos = finalPos
+    if horizDist > 160 then
+        local cruiseY = math.max(finalPos.Y + 35, Config.TravelClearanceY)
+        waypointPos = Vector3.new(finalPos.X, cruiseY, finalPos.Z)
+    end
+
+    if ActiveTween and LastTweenGoalPos and (LastTweenGoalPos - waypointPos).Magnitude < 4.0 then
+        if ActiveTween.PlaybackState == Enum.PlaybackState.Playing then
+            return
+        end
+    end
+
+    if ActiveTween then
+        pcall(function() ActiveTween:Cancel() end)
+    end
+
+    local moveDist = (waypointPos - curPos).Magnitude
+    local duration = math.max(moveDist / Config.FlightSpeed, 0.04)
+    local lookHoriz = Vector3.new(finalPos.X - waypointPos.X, 0, finalPos.Z - waypointPos.Z).Magnitude
+    local targetCF = (lookHoriz > 0.05) and CFrame.new(waypointPos, Vector3.new(finalPos.X, waypointPos.Y, finalPos.Z)) or (CFrame.new(waypointPos) * targetCFrame.Rotation)
+
+    LastTweenGoalPos = waypointPos
+    ActiveTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = targetCF })
+    ActiveTween:Play()
+end
+
+-- ============================================================================
+-- 6. ТУРБО-БОЕВАЯ СИСТЕМА (ЖИВОЙ КОНТРОЛЛЕР + ОЧИСТКА ХИТБОКСОВ ТРУПОВ)
+-- ============================================================================
+local CachedRegAtk = nil
+local CachedRegHit = nil
+local CachedCFUpvalTable = nil
+local LastCFScan = 0
+
+table.insert(Env.OllieV9_0_Connections, LocalPlayer.CharacterAdded:Connect(function()
+    stopTweenAndReleasePhysics(false)
+    FSM.ActiveCombatMob = nil
+    FSM.GroundedAtNPC = false
+    FSM.IsHealingState = false
+    CachedQuestObj = nil
+    CachedCFUpvalTable = nil
+end))
+
+local function getCombatRemotes()
+    if CachedRegAtk and CachedRegAtk.Parent and CachedRegHit and CachedRegHit.Parent then
+        return CachedRegAtk, CachedRegHit
+    end
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    local net = modules and modules:FindFirstChild("Net")
+    if net then
+        CachedRegAtk = net:FindFirstChild("RE/RegisterAttack")
+        CachedRegHit = net:FindFirstChild("RE/RegisterHit")
+    end
+    return CachedRegAtk, CachedRegHit
+end
+
+local function getCombatFrameworkCtrl()
+    if CachedCFUpvalTable and CachedCFUpvalTable.activeController then
+        return CachedCFUpvalTable.activeController
+    end
+    if (tick() - LastCFScan) < 3.5 then return nil end
+    LastCFScan = tick()
+    pcall(function()
+        local cfScript = LocalPlayer:FindFirstChild("PlayerScripts") and LocalPlayer.PlayerScripts:FindFirstChild("CombatFramework")
+        if cfScript and debug and debug.getupvalues then
+            local cf = require(cfScript)
+            local upvals = debug.getupvalues(cf)
+            if upvals and type(upvals[2]) == "table" then
+                CachedCFUpvalTable = upvals[2]
+            end
+        end
+    end)
+    return CachedCFUpvalTable and CachedCFUpvalTable.activeController or nil
+end
+
+local function equipBestTool()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum or hum.Health <= 0 then return nil end
+
+    local eq = char:FindFirstChildOfClass("Tool")
+    if eq and (eq.ToolTip == Config.WeaponType or eq.Name == "Black Leg" or eq.Name == "Combat") then
+        return eq
+    end
+
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if item:IsA("Tool") and (item.ToolTip == Config.WeaponType or item.Name == "Black Leg" or item.Name == "Combat") then
+                hum:EquipTool(item)
+                return item
+            end
+        end
+        local firstTool = bp:FindFirstChildOfClass("Tool")
+        if firstTool then
+            hum:EquipTool(firstTool)
+            return firstTool
+        end
+    end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+local function findTargetMob(qData)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local refPos = (myRoot and myRoot.Position) or (qData.MPos and qData.MPos.Position) or Vector3.new()
+
+    local bestMob = nil
+    local bestDist = math.huge
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if mobNameMatches(m.Name, qData.Mob) then
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            if mh and mr then
+                if mh.Health > 0 and mr.Position.Y > -300 and math.abs(mr.Position.Y - refPos.Y) <= 60 then
+                    local d = (mr.Position - refPos).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        bestMob = m
+                    end
+                elseif mh.Health <= 0 and mr.Size.X > 4 then
+                    pcall(function() mr.Size = DeadBoxVec end)
+                end
+            end
+        end
+    end
+    return bestMob
+end
+
+local LastSimRadiusTime = 0
+local function pullMobsTogether(mobName, targetPos)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    local boxVec = Vector3.new(Config.MobHitboxSize, Config.MobHitboxSize, Config.MobHitboxSize)
+
+    if sethiddenproperty and (tick() - LastSimRadiusTime) >= 1.5 then
+        LastSimRadiusTime = tick()
+        pcall(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        end)
+    end
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if mobNameMatches(m.Name, mobName) then
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            if mr and mh then
+                if mh.Health > 0 and (mr.Position - targetPos).Magnitude <= Config.MobPullMaxRadius then
+                    pcall(function()
+                        mr.CanCollide = false
+                        mr.Size = boxVec
+                        mr.Transparency = 0.85
+                        mr.AssemblyLinearVelocity = ZeroVec
+                        mh.WalkSpeed = 0
+                        mh.JumpPower = 0
+                        if Config.BringMobs and (mr.Position - targetPos).Magnitude > 1.2 then
+                            mr.CFrame = CFrame.new(targetPos)
+                        end
+                    end)
+                elseif mh.Health <= 0 and mr.Size.X > 4 then
+                    pcall(function() mr.Size = DeadBoxVec end)
+                end
+            end
+        end
+    end
+end
+
+local function executeAttack(mob)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not root then return end
+
+    if not char:FindFirstChild("HasBuso") and (tick() - FSM.LastBusoTry) >= Config.BusoRetryCooldown then
+        FSM.LastBusoTry = tick()
+        task.spawn(function()
+            pcall(function()
+                local comm = getCommF()
+                if comm then comm:InvokeServer("Buso") end
+            end)
+        end)
+    end
+
+    local tool = equipBestTool()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    pcall(function()
+        local regAtk, regHit = getCombatRemotes()
+        local enemies = Workspace:FindFirstChild("Enemies")
+        if regAtk and regHit and mob and mob:FindFirstChild("HumanoidRootPart") then
+            local targets = {}
+            if enemies then
+                for _, enemy in ipairs(enemies:GetChildren()) do
+                    local er = enemy:FindFirstChild("HumanoidRootPart")
+                    local eh = enemy:FindFirstChildOfClass("Humanoid")
+                    if er and eh and eh.Health > 0 and (er.Position - root.Position).Magnitude <= 70 then
+                        table.insert(targets, {enemy, er})
+                    end
+                end
+            end
+            if #targets == 0 then
+                table.insert(targets, {mob, mob.HumanoidRootPart})
+            end
+            regAtk:FireServer(0)
+            regHit:FireServer(mob.HumanoidRootPart, targets)
+        end
+    end)
+
+    pcall(function()
+        local ctrl = getCombatFrameworkCtrl()
+        if ctrl then
+            ctrl.timeToNextAttack = 0
+            ctrl.hitboxMagnitude = 65
+            ctrl:attack()
+        end
+    end)
+end
+
+-- Поток турбо-атаки (0.095 - 0.115 сек с микро-джиттером)
+task.spawn(function()
+    while isRunActive() do
+        task.wait(Config.FastAttackInterval + (math.random(5, 25) / 1000))
+        if isRunActive() and Env.OllieV9_0_Enabled and not FSM.Completed and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
+            pcall(function()
+                local mh = FSM.ActiveCombatMob:FindFirstChildOfClass("Humanoid")
+                local mr = FSM.ActiveCombatMob:FindFirstChild("HumanoidRootPart")
+                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if mh and mr and root and mh.Health > 0 and (mr.Position - root.Position).Magnitude <= 65 then
+                    executeAttack(FSM.ActiveCombatMob)
+                end
+            end)
+        end
+    end
+end)
+
+-- ============================================================================
+-- 7. АВТО-СТАТЫ И СТИЛЬ BLACK LEG
+-- ============================================================================
+local HasBoughtBlackLeg = false
+task.spawn(function()
+    while isRunActive() and task.wait(3.5 + (math.random(0, 10) / 10)) do
+        if isRunActive() and Env.OllieV9_0_Enabled and not FSM.Completed then
+            local comm = getCommF()
+            if comm then
+                if Config.AutoStats then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local pts = d and d:FindFirstChild("Points")
+                        if pts and pts.Value > 0 then
+                            local spend = math.min(pts.Value, 45)
+                            local meleePts = math.ceil(spend * 0.65)
+                            local defPts = math.max(1, spend - meleePts)
+                            comm:InvokeServer("AddPoint", "Melee", meleePts)
+                            task.wait(0.15)
+                            comm:InvokeServer("AddPoint", "Defense", defPts)
+                        end
+                    end)
+                end
+
+                if Config.AutoBuyBlackLeg and not HasBoughtBlackLeg then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local beli = d and d:FindFirstChild("Beli")
+                        local bp = LocalPlayer:FindFirstChild("Backpack")
+                        local ch = LocalPlayer.Character
+                        if (bp and bp:FindFirstChild("Black Leg")) or (ch and ch:FindFirstChild("Black Leg")) then
+                            HasBoughtBlackLeg = true
+                        elseif beli and beli.Value >= 165000 then
+                            comm:InvokeServer("BuyBlackLeg")
+                            HasBoughtBlackLeg = true
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================================
+-- 8. ГЛАВНЫЙ ЦИКЛ УПРАВЛЕНИЯ V9.0 [MULTI-BOT SYSTEM]
+-- ============================================================================
+local LastSetSpawnIsland = ""
+
+task.spawn(function()
+    while isRunActive() and task.wait(Config.LoopInterval) do
+        if not isRunActive() or FSM.Completed then
+            stopTweenAndReleasePhysics(true)
+            break
+        end
+
+        if checkBotCollision() and not IsHopping then
+            FSM.ActiveCombatMob = nil
+            stopTweenAndReleasePhysics(true)
+            logStatus("Найден свой бот на сервере! Сваливаем.")
+            task.wait(math.random(3, 7))
+            performServerHop()
+            task.wait(15)
+        elseif not Env.OllieV9_0_Enabled then
+            stopTweenAndReleasePhysics(true)
+            FSM.ActiveCombatMob = nil
+        else
+            pcall(function()
+                if not ensureTeam() then return end
+
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+                if not char or not root or not hum or hum.Health <= 0 then
+                    stopTweenAndReleasePhysics(false)
+                    FSM.ActiveCombatMob = nil
+                    FSM.IsHealingState = false
+                    logStatus("Ожидание спавна персонажа...")
+                    return
+                end
+
+                clearBlockingDialogue()
+
+                local qData, myLvl, status = getQuestByLevel()
+
+                if status == "COMPLETED" then
+                    FSM.Completed = true
+                    Env.OllieV9_0_Enabled = false
+                    stopTweenAndReleasePhysics(true)
+                    if MainFrameRef then MainFrameRef.BorderColor3 = Color3.fromRGB(255, 215, 0) end
+                    logStatus("ФАРМ ОКОНЧЕН — ДОСТИГНУТ " .. tostring(Config.MaxLevel) .. " УРОВЕНЬ!", myLvl, "COMPLETED")
+                    if not FSM.CompletionNotified then
+                        FSM.CompletionNotified = true
+                        pcall(function()
+                            StarterGui:SetCore("SendNotification", {
+                                Title = "OLLIE ENGINE V9.0",
+                                Text = "ФАРМ ОКОНЧЕН — ВСЕ ПОСТАВЛЕННЫЕ ЦЕЛИ ВЫПОЛНЕНЫ!",
+                                Duration = 10
+                            })
+                        end)
+                    end
+                    return
+                elseif status == "NEED_NEXT_SEA" or not qData then
+                    stopTweenAndReleasePhysics(true)
+                    FSM.ActiveCombatMob = nil
+                    logStatus(
+                        string.format("Достигнут лимит Sea %d (LVL %d). Перейди в Sea %d!", CurrentSeaNum, myLvl, CurrentSeaNum + 1),
+                        myLvl,
+                        "NEXT SEA"
+                    )
+                    return
+                end
+
+                local expectedQuestKey = qData.QName .. "_" .. tostring(qData.QNum)
+
+                local hpRatio = hum.Health / math.max(hum.MaxHealth, 1)
+                if Config.SafeModeEnabled then
+                    if hpRatio < Config.LowHpThreshold and not FSM.IsHealingState then
+                        FSM.IsHealingState = true
+                        FSM.ActiveCombatMob = nil
+                        FSM.SafeHealCFrame = CFrame.new(root.Position.X, math.max(root.Position.Y + Config.SafeSkyOffset, 260), root.Position.Z)
+                    elseif FSM.IsHealingState and hpRatio >= Config.RecoverHpThreshold then
+                        FSM.IsHealingState = false
+                        FSM.SafeHealCFrame = nil
+                    end
+                else
+                    FSM.IsHealingState = false
+                end
+
+                if FSM.IsHealingState and FSM.SafeHealCFrame then
+                    FSM.GroundedAtNPC = false
+                    FSM.ActiveCombatMob = nil
+                    smartMoveTo(FSM.SafeHealCFrame)
+                    logStatus(string.format("ОТХИЛ [HP: %d%% / %d%%]", math.floor(hpRatio * 100), math.floor(Config.RecoverHpThreshold * 100)), myLvl, expectedQuestKey)
+                    return
+                end
+
+                local guiQuestActive = isQuestGuiVisible()
+
+                if guiQuestActive and (
+                    (FSM.CurrentTrackedQuestKey and FSM.CurrentTrackedQuestKey ~= expectedQuestKey)
+                    or (not FSM.CurrentTrackedQuestKey and isQuestTextDefinitelyStale(qData))
+                ) then
+                    local comm = getCommF()
+                    if comm then pcall(function() comm:InvokeServer("AbandonQuest") end) end
+                    FSM.CurrentTrackedQuestKey = nil
+                    FSM.ForceFarmExpireTime = 0
+                    task.wait(0.25)
+                    guiQuestActive = isQuestGuiVisible()
+                end
+
+                local hasActiveQuest = guiQuestActive or (tick() < FSM.ForceFarmExpireTime)
+
+                if not hasActiveQuest then
+                    -- ШАГ 1: БЫСТРЫЙ ПОДЛЕТ К NPC И ВЗЯТИЕ КВЕСТА БЕЗ ПРОВАЛА СКВОЗЬ ПОЛ
+                    FSM.ActiveCombatMob = nil
+                    local npcCF = getLiveNPCCFrame(qData)
+                    local npcDist = (root.Position - npcCF.Position).Magnitude
+
+                    if npcDist > 7.5 then
+                        FSM.GroundedAtNPC = false
+                        smartMoveTo(npcCF)
+                        logStatus(string.format("Летим к NPC (%dм)", math.floor(npcDist)), myLvl, expectedQuestKey)
+                    else
+                        stopTweenOnly()
+                        ensureHoverBV(root)
+                        FSM.GroundedAtNPC = true
+                        root.CFrame = npcCF
+                        task.wait(0.25)
+
+                        local comm = getCommF()
+                        if Config.AutoSetSpawnPoint and comm and LastSetSpawnIsland ~= qData.QName then
+                            LastSetSpawnIsland = qData.QName
+                            task.spawn(function()
+                                pcall(function() comm:InvokeServer("SetSpawnPoint") end)
+                            end)
+                        end
+
+                        local serverReply = nil
+                        if comm then
+                            pcall(function()
+                                serverReply = comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
+                            end)
+                        end
+
+                        FSM.GroundedAtNPC = false
+                        FSM.QuestTriesAtNPC = FSM.QuestTriesAtNPC + 1
+                        FSM.CurrentTrackedQuestKey = expectedQuestKey
+                        logStatus("Взятие квеста #" .. tostring(FSM.QuestTriesAtNPC) .. " (Ответ: " .. tostring(serverReply) .. ")", myLvl, expectedQuestKey)
+                        task.wait(0.25)
+
+                        if isQuestGuiVisible() or FSM.QuestTriesAtNPC >= 3 then
+                            if not isQuestGuiVisible() then
+                                FSM.ForceFarmExpireTime = tick() + 28
+                            end
+                            FSM.QuestTriesAtNPC = 0
+                        end
+                    end
+                else
+                    -- ШАГ 2: ТУРБО-ФАРМ И РАННЯЯ СТЯЖКА ПАЧКИ
+                    FSM.GroundedAtNPC = false
+                    FSM.QuestTriesAtNPC = 0
+                    FSM.CurrentTrackedQuestKey = expectedQuestKey
+
+                    local mob = findTargetMob(qData)
+                    if mob and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChildOfClass("Humanoid") then
+                        FSM.ActiveCombatMob = mob
+                        local mPos = mob.HumanoidRootPart.Position
+                        local attackPos = mPos + Vector3.new(0, Config.HoverHeight, Config.AttackBackOffset)
+
+                        smartMoveTo(CFrame.new(attackPos, mPos))
+                        logStatus("Бьем: " .. mob.Name .. " [HP: " .. tostring(math.floor(mob.Humanoid.Health)) .. "]", myLvl, expectedQuestKey)
+
+                        if (root.Position - mPos).Magnitude <= Config.MobPullEngageDist then
+                            pullMobsTogether(qData.Mob, mPos)
+                        end
+                    else
+                        FSM.ActiveCombatMob = nil
+                        local waypoints = getMobSpawnWaypoints(qData)
+                        if #waypoints > 1 and (tick() - FSM.LastPatrolSwitch) >= Config.SpawnPatrolInterval then
+                            FSM.LastPatrolSwitch = tick()
+                            FSM.PatrolIndex = (FSM.PatrolIndex % #waypoints) + 1
+                        end
+                        if FSM.PatrolIndex > #waypoints then FSM.PatrolIndex = 1 end
+
+                        local targetSpawnCF = waypoints[FSM.PatrolIndex]
+                        local waitDist = (root.Position - targetSpawnCF.Position).Magnitude
+                        smartMoveTo(targetSpawnCF)
+                        logStatus(
+                            string.format("Ждем/летим к спавну %s (%dм) [%d/%d]", qData.Mob, math.floor(waitDist), FSM.PatrolIndex, #waypoints),
+                            myLvl,
+                            expectedQuestKey
+                        )
+                    end
+                end
+            end)
+        end
+    end
+end)
