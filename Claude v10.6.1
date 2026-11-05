@@ -1,0 +1,2619 @@
+-- [[ OLLIE BLOX FRUITS ENGINE V10.6 - PROJEKT REAL FULL-AUTO MONOLITH ]] --
+-- Language: Lua 5.1 / Luau | Runtime: Projekt Real
+-- V10.6 = V10.5 + 8 точечных исправлений (остальное без изменений):
+--   * 1750 LVL: COMPLETED выдаётся только когда цепочка стилей на Config.StyleTargetMastery (400); пока нет - фарм последнего квеста идёт дальше
+--   * clearBlockingDialogue жмёт только Option1 / Accept / Confirm / Next, один раз (break); Option2 и Close (отмена) больше не нажимаются
+--   * neutralScreenClick кликает в Config.DialogueNeutralClick = (600, 400), а не в (0, 0) (там меню Roblox)
+--   * после реджойна мастерство предыдущих стилей засчитывается по рангу найденного стиля; GodhumanReady учитывает доступность Dragon Breath
+--   * учителя стилей в Sea 2: поиск по имени NPC (координат нет в источниках), без подлёта покупка идёт напрямую
+--   * поток быстрой атаки не снимает Key у двери Ice Admiral (ActiveCombatMob = nil + защита в equipBestTool)
+--   * потолок перелёта в Подводном городе и трюме Cursed Ship: finalPos.Y + 15
+--   * вход в SkyTemple только с curPos.Y < 500, пауза после requestEntrance 1.0 с
+-- V10.5 = V10.4 + цель 1750 LVL, универсальная очистка диалогов, Anti-Stuck и Watchdog:
+--   * Config.MaxLevel = 1750: на 1750 LVL фарм останавливается (FSM.Completed, Enabled = false), движение и атаки прекращаются,
+--     уведомление «1750 LVL ДОСТИГНУТ! АККАУНТ ГОТОВ К ПРОДАЖЕ (GODHUMAN READY)»; если пять стилей ещё не на 400 Mastery,
+--     уведомление честно пишет об этом (статус GODHUMAN READY не выдаётся)
+--   * clearBlockingDialogue переписана: ищет Dialogue / Conversation / Subtitle / ChatBubble, жмёт Option1, Option2, Close,
+--     Next, Accept, Confirm через firesignal; монолог без кнопок (Escaped Prisoner) скрывается (Visible = false);
+--     после закрытия делается нейтральный клик VirtualUser в точке (0, 0) (Config.DialogueNeutralClick)
+--   * таймаут урона по мобу: если за 12 секунд боя здоровье моба не упало на 50, он попадает в IgnoredMobs на 90 секунд,
+--     цель сбрасывается, персонаж смещается на 30 studs вверх и в сторону; findTargetMob пропускает игнорируемых мобов
+--   * высота в бою: Y между игроком и мобом не больше HoverHeight + 5 studs (лишнее срезается вниз)
+--   * Watchdog: нет роста уровня, опыта и Beli больше 240 секунд в обычном фарме -> AbandonQuest, BreakJoints, сброс состояния
+--   * боевые и полётные тайминги, Sea 1 -> Sea 2, StyleTeachers, сниппер фруктов, гача и стартовый фильтр не менялись
+-- V10.4 = V10.3 + линейная прокачка боевых стилей до 400 Mastery («Godhuman Ready»):
+--   * каждый стиль цепочки Dark Step -> Electric -> Water Kung Fu -> Dragon Breath -> Superhuman качается до 400 Mastery
+--     (Config.StyleTargetMastery) и только потом покупается следующий; при респавне надевается самый продвинутый
+--     купленный стиль, на котором ещё нет 400 Mastery
+--   * перед покупкой бот один раз подлетает к учителю стиля (координаты в таблице StyleTeachers вверху файла),
+--     покупает и возвращается к фарму; если долететь не удалось за 90 секунд, покупка вызывается напрямую
+--   * Dragon Breath: если Fragments меньше 1500, бот не зависает и продолжает фарм на Water Kung Fu
+--   * калькулятор FunPay и табло: строка «Стиль: Electric [285/400]» и надбавка +3.80 EUR чистыми за «Godhuman Ready»
+--     (4 базовых стиля и Superhuman на 400 Mastery)
+--   * тайминги боя и полёта, Sea 1 -> Sea 2, сниппер фруктов, гача и стартовый поиск пустого сервера не менялись
+-- V10.3 = V10.1 + точечные исправления (всё остальное без изменений):
+--   * убран continue (совместимость с Lua 5.1-парсерами)
+--   * опциональный queue_on_teleport (ReloadScriptUrl) для перезапуска после телепортов
+--   * сниппер фруктов: таймаут 25 с + чёрный список на 5 мин (не зависает на недостижимом фрукте)
+--   * гача раз в 2 часа (было 120 секунд), интервал в Config.GachaIntervalSec
+--   * стили: флаги Has* только по факту надетого стиля, кулдаун покупки, имена Dark Step / Electric
+--   * HP-защита стоит выше сниппера фруктов и ветки перехода в Sea 2
+--   * лёгкие проверки GUI (PlayerGui.Main.Quest, троттлинг диалогов и табло)
+--   * переход в Sea 2: убран непроверенный аргумент "UseKey", добавлен print состояния DressrosaQuestProgress
+--   * getQuestByLevel: уровень ниже первого квеста моря -> первый квест, а не последний
+--   * ротация стилей: после покупки надевается самый новый купленный стиль (раньше оставался первый надетый)
+--   * переход в Sea 2: запрос к Детективу без таблицы прогресса не чаще раза в 3 секунды (раньше каждый тик)
+--   * Superhuman: Superhuman требует Dragon Breath 300 мастери, поэтому после Water Kung Fu бот покупает Dragon Breath
+--     за 1500 Fragments (remote BlackbeardReward / DragonClaw, как в рабочих скриптах); без Fragments попытка пропускается
+--   * дверь Ice Admiral: если за 8 секунд дверь не открылась, персонаж смещается на 6 studs вперёд/назад (повторный Touch)
+--   * Sea 3: автоматически не открывается (код из 8 кнопок в Colosseum есть только картинкой), на 1500 LVL выводится подсказка
+-- Архитектура V10.1 (сохранена):
+--   1. 100% АВТОМАТИЧЕСКИЙ ПЕРЕХОД SEA 1 -> SEA 2 (На 700 LVL без участия человека):
+--      - Берет ключ у Детектива в Тюрьме -> экипирует Key -> открывает дверь в Ледяном Замке ->
+--        убивает босса Ice Admiral -> сдает квест и телепортирует аккаунт во Второе Море (TravelDressrosa).
+--   2. БЕЗОСТАНОВОЧНЫЙ ФАРМ ДО Config.MaxLevel (1750 LVL) (Fallback для Sea 2 -> Sea 3):
+--      - Если аккаунт достиг 1500 LVL в Sea 2, но переход в Sea 3 еще не открыт (так как для Sea 3 нужен рейд-босс Rip_Indra),
+--        бот НЕ останавливается, а продолжает качать 1500 -> 1750 LVL на топовом квесте Второго Моря (Water Fighter).
+--   3. ВХОД НА ПУСТОЙ СЕРВЕР НА СТАРТЕ (StartupEmptyServerLock) БЕЗ ХОПОВ ВО ВРЕМЯ ФАРМА:
+--      - Только при первом входе в игру: если на сервере > 2 человек или есть другой твой бот, скрипт через HttpGet
+--        запрашивает список серверов Roblox по возрастанию (sortOrder=Asc -> 1 игрок на сервере), прыгает туда ОДИН РАЗ
+--        и намертво выключает смену серверов на все время фарма.
+--   4. ФРУКТОВЫЙ СНАЙПЕР + ГАЧА + АВТО-СКЛАД (Аккаунты по 6-12 Евро):
+--      - Каждые 2 часа покупает фрукт у Cousin + сканирует карту на натурально заспавнившиеся фрукты,
+--        подбирает их и прячет в постоянное хранилище (StoreFruit).
+--   5. ТАБЛО ОЦЕНКИ FUNPAY (-13% комиссия):
+--      - Кнопка «ТАБЛО FUNPAY» показывает чистую цену аккаунта в EUR (€), RUB (₽) и UAH (₴).
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.15)
+    LocalPlayer = Players.LocalPlayer
+end
+
+math.randomseed((LocalPlayer.UserId % 1000000) + math.floor((os.clock() % 1) * 1000000) + os.time())
+for _ = 1, 5 do math.random() end
+
+-- ============================================================================
+-- 0.0 УЧИТЕЛЯ БОЕВЫХ СТИЛЕЙ (подлёт перед покупкой, чтобы пройти серверную проверку дистанции)
+-- ============================================================================
+-- CF: координаты учителя (заданы вручную, при необходимости правятся здесь).
+-- Names: имена NPC для поиска вживую рядом с этой координатой (если NPC найден, бот летит к нему, иначе по CF).
+-- Sea: в каком море учитель; Remote: remote покупки (для Dragon Breath используется BlackbeardReward / DragonClaw).
+-- Sea2Search (V10.6): те же учителя стоят и в Sea 2 (Hot and Cold, у вулкана). Координат Sea 2 в источниках нет, поэтому
+-- в Sea 2 учитель ищется по имени NPC без привязки к координате; если NPC не найден, покупка идёт напрямую без подлёта.
+local StyleTeachers = {
+    BlackLeg = {
+        Label = "Black Leg", Sea = 1, Sea2Search = true, Remote = "BuyBlackLeg",
+        CF = CFrame.new(-466.8, 15.0, 4376.1),          -- Black Leg Teacher (Барати)
+        Names = { "Dark Step Teacher", "Black Leg Teacher" }
+    },
+    Electro = {
+        Label = "Electro", Sea = 1, Sea2Search = true, Remote = "BuyElectro",
+        CF = CFrame.new(-4708.5, 845.3, -1925.8),       -- Electro Teacher (Скайленд, за камнями)
+        Names = { "Mad Scientist", "Electro Teacher", "Electric Teacher" }
+    },
+    FishmanKarate = {
+        Label = "Water Kung Fu", Sea = 1, Sea2Search = true, Remote = "BuyFishmanKarate",
+        CF = CFrame.new(61122.6, 18.5, 1569.4),         -- Water Kung Fu Teacher (Подводный город)
+        Names = { "Water Kung Fu Teacher", "Water Kung-fu Teacher", "Fishman Karate Teacher" }
+    },
+    DragonBreath = {
+        Label = "Dragon Breath", Sea = 2, Remote = nil,
+        CF = CFrame.new(-380.5, 74.5, 298.5),           -- Sabi (Dragon Breath, стена Kingdom of Rose, Sea 2)
+        Names = { "Sabi" }
+    },
+    Superhuman = {
+        Label = "Superhuman", Sea = 2, Remote = "BuySuperhuman",
+        CF = CFrame.new(650.5, 400.2, -5340.5),         -- Martial Arts Master (Superhuman, пещера Снежной Горы, Sea 2)
+        Names = { "Martial Arts Master", "Martial Arts Trainer" }
+    }
+}
+
+-- ============================================================================
+-- 0. АВТО-РОУТЕР ИЗ ЛОББИ И ОЧИСТКА СТАРЫХ ПОТОКОВ (V1 - V10.6)
+-- ============================================================================
+
+-- Ссылка на raw-версию ЭТОГО скрипта. Если заполнить, то после любого телепорта
+-- (прыжок на пустой сервер, лобби, переход в Sea 2) скрипт перезапустится сам через queue_on_teleport.
+-- Оставь пустой строкой "", если в экзекьюторе уже настроен автозапуск (autoexec).
+local ReloadScriptUrl = ""
+
+local function queueReloadAfterTeleport()
+    if type(ReloadScriptUrl) ~= "string" or ReloadScriptUrl == "" then return end
+    local q = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+    if type(q) == "function" then
+        pcall(q, string.format('loadstring(game:HttpGet("%s"))()', ReloadScriptUrl))
+    end
+end
+queueReloadAfterTeleport()
+
+local PlaceId = game.PlaceId
+local Sea1_PlaceId = 2753915549
+local Sea2_PlaceId = 4442272183
+local Sea3_PlaceId = 7449423635
+
+if PlaceId ~= Sea1_PlaceId and PlaceId ~= Sea2_PlaceId and PlaceId ~= Sea3_PlaceId then
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "OLLIE ENGINE V10.6 [PROJEKT REAL]",
+            Text = "Внешнее лобби! Авто-вход в Blox Fruits...",
+            Duration = 5
+        })
+    end)
+    task.wait(1.2)
+    pcall(function()
+        TeleportService:Teleport(Sea1_PlaceId, LocalPlayer)
+    end)
+    return
+end
+
+local Env = (getgenv and getgenv()) or _G
+for i = 1, 10 do
+    Env["OllieV" .. i .. "_Running"] = false
+    Env["OllieV" .. i .. "_Enabled"] = false
+end
+for _, subVer in ipairs({"8_1", "8_7", "8_8", "8_9", "8_9_1", "8_9_2", "8_9_3", "8_9_4", "9_0", "10_0", "10_1", "10_2", "10_3", "10_4", "10_5", "10_6"}) do
+    Env["OllieV" .. subVer .. "_Running"] = false
+    Env["OllieV" .. subVer .. "_Enabled"] = false
+end
+
+local MyRunId = (tonumber(Env.OllieV10_6_RunId) or 0) + 1
+Env.OllieV10_6_RunId = MyRunId
+Env.OllieV10_6_Running = true
+Env.OllieV10_6_Enabled = true
+
+for _, cleanupKey in ipairs({
+    "OllieV8_8_Cleanup", "OllieV8_9_Cleanup", "OllieV8_9_1_Cleanup",
+    "OllieV8_9_2_Cleanup", "OllieV8_9_3_Cleanup", "OllieV8_9_4_Cleanup",
+    "OllieV9_0_Cleanup", "OllieV10_0_Cleanup", "OllieV10_1_Cleanup", "OllieV10_2_Cleanup", "OllieV10_3_Cleanup", "OllieV10_4_Cleanup", "OllieV10_5_Cleanup", "OllieV10_6_Cleanup"
+}) do
+    if type(Env[cleanupKey]) == "function" then
+        pcall(Env[cleanupKey])
+    end
+end
+
+for _, connKey in ipairs({
+    "OllieV6_Connections", "OllieV7_Connections", "OllieV8_Connections",
+    "OllieV8_1_Connections", "OllieV8_7_Connections", "OllieV8_8_Connections",
+    "OllieV8_9_Connections", "OllieV8_9_1_Connections", "OllieV8_9_2_Connections",
+    "OllieV8_9_3_Connections", "OllieV8_9_4_Connections", "OllieV9_0_Connections",
+    "OllieV10_0_Connections", "OllieV10_1_Connections", "OllieV10_2_Connections", "OllieV10_3_Connections", "OllieV10_4_Connections", "OllieV10_5_Connections", "OllieV10_6_Connections"
+}) do
+    if type(Env[connKey]) == "table" then
+        for _, conn in ipairs(Env[connKey]) do
+            pcall(function()
+                if conn and conn.Connected then conn:Disconnect() end
+            end)
+        end
+    end
+end
+Env.OllieV10_6_Connections = {}
+
+local function isRunActive()
+    return Env.OllieV10_6_Running == true and Env.OllieV10_6_RunId == MyRunId
+end
+
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "OLLIE V10.6 [PROJEKT REAL]",
+        Text = "100% Авто-Фарм + Авто Sea 2 + Пустой Сервер + Биржа FunPay!",
+        Duration = 5
+    })
+end)
+
+-- ============================================================================
+-- 1. КОНФИГУРАЦИЯ V10.6 [PROJEKT REAL FULL-AUTO]
+-- ============================================================================
+local Config = {
+    MyBotNames = {
+        "pearleyits", "rykermolten00", "w1zard_football2011", "ra1nbowcloud80", "dream_cat89157",
+        "dr1p_cougar01", "arcane_kraken13", "rain8owdirE0", "c1utchhyolo1", "frediewarden20",
+        "cei1sixseven", "roblox_phantasm2011", "sparrowwfootball", "l1nacosmo93", "titanshadow2008",
+        "lion_fredie260187", "judythnocap21", "cobraaboulder", "real_stellarr1192", "demarionn_lowkey966",
+        "thewhisper30811", "primemoon7849", "fOotball_monarch04", "ethereal_cap546", "appleofficial200769",
+        "missiexx98", "crin9ewi1d5", "teressa_blitz5", "sigmasylvania19", "yuridiaClaw9656",
+        "Scout_Horizon9869", "LethalOsprey_7709397", "OrcaLion_8964544512", "GlitchAlpha068742203",
+        "TinyCamel67261513", "AngryGlass806140886", "BronzeMagnet17069", "WaveQuad5216828300",
+        "Eerie_Commander25848", "Lively_Commander0253", "ArdentHydra71403", "Kinetic_Jet36130",
+        "Main_Lynx18190513887"
+    },
+    MaxLevel = 1750,                    -- Целевой уровень завершения (1750 LVL): на нём фарм полностью останавливается
+    StopOnGoalCompleted = true,
+
+    -- Настройки сервера (Одноразовый поиск пустого сервера на старте, без хопов во время фарма)
+    StartupEmptyServerSeek = true,      -- На старте зайти на самый пустой сервер (1-2 чел) без наших ботов
+    MaxPlayersAllowedOnStart = 3,       -- Если на старте больше 3 человек -> прыжок на сервер с 1 игроком
+    StartupSeekWindowSec = 40,          -- Проверять сервер только первые 40 секунд после запуска
+    AutoServerHopDuringFarm = false,    -- Выключено: во время фарма сервер НЕ меняется
+
+    -- Полная автоматизация прогрессии
+    AutoSea2Transition = true,          -- На 700 LVL сам проходит квест Детектива, убивает Ice Admiral и летит в Sea 2
+    ContinueFarmIfNextSeaLocked = true, -- Если на 1500 LVL в Sea 2 закрыт Sea 3, качает до Config.MaxLevel (1750 LVL) на Water Fighter
+    AutoRedeemCodes = true,
+    AutoStats = true,
+    AutoRotateFightingStyles = true,    -- Combat -> Black Leg -> Electro -> Fishman Karate -> Superhuman
+    StyleBuyCooldownSec = 30,           -- Не чаще одной попытки покупки боевого стиля за 30 секунд
+    DragonClawFragmentCost = 1500,      -- Dragon Breath (Dragon Claw) у Sabi стоит 1500 Fragments (нужен для Superhuman)
+    DragonClawTryCooldownSec = 600,     -- Не чаще одной попытки покупки Dragon Breath за 10 минут
+    StyleTargetMastery = 400,           -- Каждый стиль цепочки качается до 400 Mastery перед покупкой следующего («Godhuman Ready»)
+    StyleGateMaxExtraLevels = 250,      -- Страховочный клапан: если стили не добиты, фарм после MaxLevel всё равно останавливается на MaxLevel + 250 (0 = без лимита)
+    GodhumanReadyWithoutDragon = false, -- true: «Godhuman Ready» (и надбавка FunPay) выдаётся и без Dragon Breath / Superhuman, когда Fragments < 1500
+    UseTeacherTrips = true,             -- Перед покупкой стиля один раз подлетать к учителю (StyleTeachers вверху файла)
+    StyleTeacherReachDist = 12,         -- На каком расстоянии от учителя вызывается покупка
+    StyleTripTimeoutSec = 90,           -- Не долетели за 90 секунд: прямой вызов покупки и пауза
+    GodhumanReadyBonusNetEUR = 3.80,    -- Надбавка к цене аккаунта «Godhuman Ready» (чистыми после комиссии)
+
+    -- Диалоги, Anti-Stuck и Watchdog (V10.6)
+    DialogueNeutralClick = true,        -- После закрытия диалога делать клик VirtualUser в пустой точке экрана, чтобы снять фокус с NPC
+    DialogueNeutralClickX = 600,        -- Точка клика (V10.6): не (0, 0), там системное меню Roblox. Зажимается в границы экрана
+    DialogueNeutralClickY = 400,
+    DialogueNeutralClickCooldownSec = 2,
+    DialogueForceHideAfterTries = 3,    -- Если кнопки диалога не закрыли его за 3 попытки, контейнер скрывается принудительно
+    MobDamageTimeoutSec = 12,           -- Бьём одного и того же моба дольше 12 секунд ...
+    MobDamageMinDrop = 50,              -- ... а его здоровье не упало хотя бы на 50: моб игнорируется
+    MobIgnoreSec = 90,                  -- Сколько секунд такой моб игнорируется
+    MobDamageEngageDist = 70,           -- Таймер урона идёт только когда мы ближе этой дистанции к мобу (бьём, а не летим)
+    AntiStuckShift = 30,                -- Смещение персонажа вверх и в сторону при сбросе цели (studs)
+    CombatYTolerance = 5,               -- В бою Y между игроком и мобом не больше HoverHeight + 5 studs
+    CombatYGuardHorizDist = 40,         -- Контроль высоты включается, когда по горизонтали мы ближе 40 studs к мобу
+    WatchdogTimeoutSec = 240,           -- Нет роста уровня, опыта и Beli больше 240 секунд: сброс квеста и респавн
+    AutoRollAndStoreFruit = true,       -- Покупка фрукта у Cousin раз в GachaIntervalSec + сохранение на склад
+    GachaIntervalSec = 7200,            -- Интервал гачи у Cousin: 2 часа
+    MinBeliForFruitRoll = 450000,
+    AutoSnipeWorldFruits = true,        -- Подбирать заспавнившиеся на карте фрукты
+    WorldFruitMaxDist = 2500,           -- Радиус перехвата фруктов на карте
+    FruitPickupTimeoutSec = 25,         -- Если фрукт не удалось подобрать за 25 секунд -> в чёрный список
+    FruitBlacklistSec = 300,            -- Сколько секунд такой фрукт игнорируется
+    AutoSetSpawnPoint = true,
+    BringMobs = true,
+    WeaponType = "Melee",
+
+    -- Стелс-скорость и бой (снижает риск флагов; гарантии от бана нет)
+    FlightSpeed = 230,                  -- Крейсерская скорость Tween
+    LoopInterval = 0.06,
+    FastAttackInterval = 0.085,
+    HoverHeight = 14.5,
+    AttackBackOffset = 1.5,
+    MobHitboxSize = 64,
+    MobPullEngageDist = 95,
+    MobPullMaxRadius = 350,
+    TravelClearanceY = 85,
+    SafeModeEnabled = true,
+    LowHpThreshold = 0.30,
+    RecoverHpThreshold = 0.80,
+    SafeSkyOffset = 180,
+    BusoRetryCooldown = 6.0,
+    SpawnPatrolInterval = 3.5,
+
+    -- Рыночный калькулятор FunPay
+    FunPayCommissionRate = 0.13,        -- 13% (комиссия FunPay + вывод)
+    EurToRub = 104.0,
+    EurToUah = 45.5
+}
+
+local FSM = {
+    State = "INIT",
+    Completed = false,
+    CompletionNotified = false,
+    StartupServerLocked = false,
+    CurrentTrackedQuestKey = nil,
+    QuestTriesAtNPC = 0,
+    ForceFarmExpireTime = 0,
+    ActiveCombatMob = nil,
+    GroundedAtNPC = false,
+    IsHealingState = false,
+    SafeHealCFrame = nil,
+    LastBusoTry = 0,
+    LastGachaTry = 0,
+    LastStyleBuyTry = 0,
+    LastDragonClawTry = 0,
+    StyleTrip = nil,
+    DragonFragHintShown = false,
+    Sea3HintShown = false,
+    Sea2TransitionTick = 0,
+    LastInventoryScan = 0,
+    PatrolIndex = 1,
+    LastPatrolSwitch = 0,
+    SessionStartTime = os.clock(),
+    StartLevel = nil,
+    StartBeli = nil
+}
+
+-- ============================================================================
+-- 2. БАЗА ЦЕН ФРУКТОВ FUNPAY (ДЛЯ ОЦЕНКИ 6+ EUR)
+-- ============================================================================
+local FruitMarketValueEUR = {
+    ["Kitsune-Kitsune"]   = 4.50,
+    ["Dragon-Dragon"]     = 5.00,
+    ["Leopard-Leopard"]   = 2.80,
+    ["Gas-Gas"]           = 2.50,
+    ["Yeti-Yeti"]         = 3.00,
+    ["Dough-Dough"]       = 2.20,
+    ["T-Rex-T-Rex"]       = 1.90,
+    ["Buddha-Buddha"]     = 1.60,
+    ["Portal-Portal"]     = 1.50,
+    ["Mammoth-Mammoth"]   = 1.40,
+    ["Spirit-Spirit"]     = 1.20,
+    ["Venom-Venom"]       = 1.10,
+    ["Control-Control"]   = 1.00,
+    ["Rumble-Rumble"]     = 0.90,
+    ["Blizzard-Blizzard"] = 0.80,
+    ["Shadow-Shadow"]     = 0.80,
+    ["Sound-Sound"]       = 0.50,
+    ["Magma-Magma"]       = 0.45,
+    ["Light-Light"]       = 0.35,
+    ["Ice-Ice"]           = 0.25
+}
+
+local AccountValuation = {
+    StoredFruitsCount = 0,
+    HighValueFruitsList = {},
+    HasBlackLeg = false,
+    HasElectro = false,
+    HasFishmanKarate = false,
+    HasSuperhuman = false,
+    GodhumanReady = false,
+    StyleMastery = {},
+    StyleTopRank = 0,       -- ранг самого продвинутого найденного стиля (V10.6)
+    StyleChainDone = false, -- цепочка стилей добита с учётом доступности Dragon Breath (V10.6)
+    CurStyleName = "--",
+    CurStyleMastery = 0,
+    GrossEUR = 0,
+    NetEUR = 0,
+    NetRUB = 0,
+    NetUAH = 0
+}
+
+-- ============================================================================
+-- 3. ТАБЛИЦЫ КВЕСТОВ ВСЕХ ТРЕХ МОРЕЙ (SEA 1, SEA 2, SEA 3)
+-- ============================================================================
+local QuestsSea1 = {
+    {Min = 1,   Max = 9,   Mob = "Bandit",              NPC = "Bandit Quest Giver",    QName = "BanditQuest1",   QNum = 1, QPos = CFrame.new(1059.37, 16.36, 1549.25),   MPos = CFrame.new(1145.00, 17.00, 1634.00)},
+    {Min = 10,  Max = 14,  Mob = "Monkey",              NPC = "Adventurer",            QName = "JungleQuest",    QNum = 1, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1448.51, 67.85, 11.46)},
+    {Min = 15,  Max = 29,  Mob = "Gorilla",             NPC = "Adventurer",            QName = "JungleQuest",    QNum = 2, QPos = CFrame.new(-1598.08, 35.55, 153.37),   MPos = CFrame.new(-1129.88, 40.46, -525.42)},
+    {Min = 30,  Max = 39,  Mob = "Pirate",              NPC = "Pirate Adventurer",     QName = "BuggyQuest1",    QNum = 1, QPos = CFrame.new(-1141.07, 4.10, 3831.54),   MPos = CFrame.new(-1103.51, 13.75, 3896.09)},
+    {Min = 40,  Max = 59,  Mob = "Brute",               NPC = "Pirate Adventurer",     QName = "BuggyQuest1",    QNum = 2, QPos = CFrame.new(-1141.07, 4.10, 3831.54),   MPos = CFrame.new(-1140.08, 14.80, 4322.92)},
+    {Min = 60,  Max = 74,  Mob = "Desert Bandit",       NPC = "Desert Adventurer",     QName = "DesertQuest",    QNum = 1, QPos = CFrame.new(894.48, 5.14, 4392.43),     MPos = CFrame.new(924.79, 6.44, 4481.58)},
+    {Min = 75,  Max = 89,  Mob = "Desert Officer",      NPC = "Desert Adventurer",     QName = "DesertQuest",    QNum = 2, QPos = CFrame.new(894.48, 5.14, 4392.43),     MPos = CFrame.new(1608.28, 8.61, 4371.00)},
+    {Min = 90,  Max = 99,  Mob = "Snow Bandit",         NPC = "Villager",              QName = "SnowQuest",      QNum = 1, QPos = CFrame.new(1389.74, 88.15, -1298.90),  MPos = CFrame.new(1354.34, 87.27, -1393.94)},
+    {Min = 100, Max = 119, Mob = "Snowman",             NPC = "Villager",              QName = "SnowQuest",      QNum = 2, QPos = CFrame.new(1389.74, 88.15, -1298.90),  MPos = CFrame.new(1201.64, 144.57, -1550.06)},
+    {Min = 120, Max = 149, Mob = "Chief Petty Officer", NPC = "Marine",                QName = "MarineQuest2",   QNum = 1, QPos = CFrame.new(-5039.58, 27.35, 4324.68),  MPos = CFrame.new(-4881.23, 22.65, 4273.75)},
+    {Min = 150, Max = 174, Mob = "Sky Bandit",          NPC = "Sky Adventurer",        QName = "SkyQuest",       QNum = 1, QPos = CFrame.new(-4839.53, 716.36, -2619.44), MPos = CFrame.new(-4953.20, 295.74, -2899.22)},
+    {Min = 175, Max = 189, Mob = "Dark Master",         NPC = "Sky Adventurer",        QName = "SkyQuest",       QNum = 2, QPos = CFrame.new(-4839.53, 716.36, -2619.44), MPos = CFrame.new(-5259.84, 391.39, -2229.03)},
+    {Min = 190, Max = 209, Mob = "Prisoner",            NPC = "Warden",                QName = "PrisonerQuest",  QNum = 1, QPos = CFrame.new(5308.93, 1.65, 475.12),     MPos = CFrame.new(5098.97, 8.50, 474.23)},
+    {Min = 210, Max = 249, Mob = "Dangerous Prisoner",  NPC = "Warden",                QName = "PrisonerQuest",  QNum = 2, QPos = CFrame.new(5308.93, 1.65, 475.12),     MPos = CFrame.new(5654.56, 15.63, 866.29)},
+    {Min = 250, Max = 274, Mob = "Toga Warrior",        NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 1, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1820.21, 51.68, -2740.66)},
+    {Min = 275, Max = 299, Mob = "Gladiator",           NPC = "Colosseum Quest Giver", QName = "ColosseumQuest", QNum = 2, QPos = CFrame.new(-1580.04, 6.35, -2986.47),  MPos = CFrame.new(-1292.83, 56.38, -3339.03)},
+    {Min = 300, Max = 324, Mob = "Military Soldier",    NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 1, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5411.16, 11.08, 8454.29)},
+    {Min = 325, Max = 374, Mob = "Military Spy",        NPC = "The Mayor",             QName = "MagmaQuest",     QNum = 2, QPos = CFrame.new(-5313.37, 10.95, 8515.29),  MPos = CFrame.new(-5810.00, 14.50, 8835.00)},
+    {Min = 375, Max = 399, Mob = "Fishman Warrior",     NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 1, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(60878.30, 18.48, 1543.75)},
+    {Min = 400, Max = 449, Mob = "Fishman Commando",    NPC = "King Neptune",          QName = "FishmanQuest",   QNum = 2, QPos = CFrame.new(61122.65, 18.49, 1569.39),  MPos = CFrame.new(61922.63, 18.48, 1493.93)},
+    {Min = 450, Max = 474, Mob = "God's Guard",         NPC = "Mole",                  QName = "SkyExp1Quest",   QNum = 1, QPos = CFrame.new(-4721.88, 843.87, -1949.96), MPos = CFrame.new(-4710.04, 845.27, -1927.30)},
+    {Min = 475, Max = 524, Mob = "Shanda",              NPC = "SkyExp1",               QName = "SkyExp1Quest",   QNum = 2, QPos = CFrame.new(-7859.09, 5544.19, -381.47), MPos = CFrame.new(-7678.48, 5566.40, -497.21)},
+    {Min = 525, Max = 549, Mob = "Royal Squad",         NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 1, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7624.25, 5658.13, -1467.35)},
+    {Min = 550, Max = 624, Mob = "Royal Soldier",       NPC = "SkyExp2",               QName = "SkyExp2Quest",   QNum = 2, QPos = CFrame.new(-7906.81, 5634.66, -1411.99), MPos = CFrame.new(-7836.75, 5645.66, -1790.62)},
+    {Min = 625, Max = 649, Mob = "Galley Pirate",       NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 1, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5551.02, 78.90, 3930.41)},
+    {Min = 650, Max = 699, Mob = "Galley Captain",      NPC = "Freezeburg",            QName = "FountainQuest",  QNum = 2, QPos = CFrame.new(5259.81, 37.35, 4050.02),   MPos = CFrame.new(5649.95, 38.53, 4936.26)}
+}
+
+local QuestsSea2 = {
+    {Min = 700,  Max = 724,  Mob = "Raider",               NPC = "Area 1 Quest Giver",     QName = "Area1Quest",        QNum = 1, QPos = CFrame.new(-429.54, 71.77, 1836.18),    MPos = CFrame.new(-728.32, 52.78, 2345.77)},
+    {Min = 725,  Max = 774,  Mob = "Mercenary",            NPC = "Area 1 Quest Giver",     QName = "Area1Quest",        QNum = 2, QPos = CFrame.new(-429.54, 71.77, 1836.18),    MPos = CFrame.new(-1004.32, 80.16, 1424.62)},
+    {Min = 775,  Max = 799,  Mob = "Swan Pirate",          NPC = "Area 2 Quest Giver",     QName = "Area2Quest",        QNum = 1, QPos = CFrame.new(638.44, 71.77, 918.28),      MPos = CFrame.new(1068.66, 137.61, 1322.11)},
+    {Min = 800,  Max = 874,  Mob = "Factory Staff",        NPC = "Area 2 Quest Giver",     QName = "Area2Quest",        QNum = 2, QPos = CFrame.new(638.44, 71.77, 918.28),      MPos = CFrame.new(73.08, 81.86, -27.47)},
+    {Min = 875,  Max = 899,  Mob = "Marine Lieutenant",    NPC = "Marine Quest Giver",     QName = "MarineQuest3",      QNum = 1, QPos = CFrame.new(-2440.80, 71.71, -3216.07),  MPos = CFrame.new(-2821.37, 75.90, -3070.09)},
+    {Min = 900,  Max = 949,  Mob = "Marine Captain",       NPC = "Marine Quest Giver",     QName = "MarineQuest3",      QNum = 2, QPos = CFrame.new(-2440.80, 71.71, -3216.07),  MPos = CFrame.new(-1861.23, 80.18, -3254.70)},
+    {Min = 950,  Max = 974,  Mob = "Zombie",               NPC = "Graveyard Quest Giver",  QName = "ZombieQuest",       QNum = 1, QPos = CFrame.new(-5497.06, 47.59, -795.24),   MPos = CFrame.new(-5657.78, 78.97, -928.69)},
+    {Min = 975,  Max = 999,  Mob = "Vampire",              NPC = "Graveyard Quest Giver",  QName = "ZombieQuest",       QNum = 2, QPos = CFrame.new(-5497.06, 47.59, -795.24),   MPos = CFrame.new(-6037.67, 32.18, -1340.66)},
+    {Min = 1000, Max = 1049, Mob = "Snow Trooper",         NPC = "Snow Quest Giver",       QName = "SnowMountainQuest", QNum = 1, QPos = CFrame.new(609.86, 400.12, -5372.26),   MPos = CFrame.new(549.15, 427.39, -5563.70)},
+    {Min = 1050, Max = 1099, Mob = "Winter Warrior",       NPC = "Snow Quest Giver",       QName = "SnowMountainQuest", QNum = 2, QPos = CFrame.new(609.86, 400.12, -5372.26),   MPos = CFrame.new(1142.75, 475.64, -5199.42)},
+    {Min = 1100, Max = 1124, Mob = "Lab Subordinate",      NPC = "Ice Quest Giver",        QName = "IceSideQuest",      QNum = 1, QPos = CFrame.new(-6064.07, 15.24, -4902.98),  MPos = CFrame.new(-5707.47, 15.95, -4513.39)},
+    {Min = 1125, Max = 1174, Mob = "Horned Warrior",       NPC = "Ice Quest Giver",        QName = "IceSideQuest",      QNum = 2, QPos = CFrame.new(-6064.07, 15.24, -4902.98),  MPos = CFrame.new(-6341.37, 15.95, -5723.16)},
+    {Min = 1175, Max = 1199, Mob = "Magma Ninja",          NPC = "Fire Quest Giver",       QName = "FireSideQuest",     QNum = 1, QPos = CFrame.new(-5428.03, 15.06, -5299.43),  MPos = CFrame.new(-5449.67, 76.66, -5808.20)},
+    {Min = 1200, Max = 1249, Mob = "Lava Pirate",          NPC = "Fire Quest Giver",       QName = "FireSideQuest",     QNum = 2, QPos = CFrame.new(-5428.03, 15.06, -5299.43),  MPos = CFrame.new(-5213.33, 49.74, -4701.45)},
+    {Min = 1250, Max = 1274, Mob = "Ship Deckhand",        NPC = "Rear Crew Quest Giver",  QName = "ShipQuest1",        QNum = 1, QPos = CFrame.new(1037.80, 125.09, 32911.60),  MPos = CFrame.new(1212.01, 150.79, 33059.25)},
+    {Min = 1275, Max = 1299, Mob = "Ship Engineer",        NPC = "Rear Crew Quest Giver",  QName = "ShipQuest1",        QNum = 2, QPos = CFrame.new(1037.80, 125.09, 32911.60),  MPos = CFrame.new(919.48, 43.54, 32779.97)},
+    {Min = 1300, Max = 1324, Mob = "Ship Steward",         NPC = "Front Crew Quest Giver", QName = "ShipQuest2",        QNum = 1, QPos = CFrame.new(968.80, 125.09, 33244.13),   MPos = CFrame.new(919.44, 129.59, 33436.04)},
+    {Min = 1325, Max = 1349, Mob = "Ship Officer",         NPC = "Front Crew Quest Giver", QName = "ShipQuest2",        QNum = 2, QPos = CFrame.new(968.80, 125.09, 33244.13),   MPos = CFrame.new(1036.02, 181.44, 33315.73)},
+    {Min = 1350, Max = 1374, Mob = "Arctic Warrior",       NPC = "Frost Quest Giver",      QName = "FrostQuest",        QNum = 1, QPos = CFrame.new(5667.66, 26.80, -6486.09),   MPos = CFrame.new(5966.25, 62.97, -6179.38)},
+    {Min = 1375, Max = 1424, Mob = "Snow Lurker",          NPC = "Frost Quest Giver",      QName = "FrostQuest",        QNum = 2, QPos = CFrame.new(5667.66, 26.80, -6486.09),   MPos = CFrame.new(5407.07, 69.19, -6880.88)},
+    {Min = 1425, Max = 1449, Mob = "Sea Soldier",          NPC = "Forgotten Quest Giver",  QName = "ForgottenQuest",    QNum = 1, QPos = CFrame.new(-3054.44, 235.54, -10142.82),MPos = CFrame.new(-3028.22, 64.67, -9775.43)},
+    {Min = 1450, Max = 1499, Mob = "Water Fighter",        NPC = "Forgotten Quest Giver",  QName = "ForgottenQuest",    QNum = 2, QPos = CFrame.new(-3054.44, 235.54, -10142.82),MPos = CFrame.new(-3352.90, 285.02, -10534.84)}
+}
+
+local QuestsSea3 = {
+    {Min = 1500, Max = 1524, Mob = "Pirate Millionaire",    NPC = "Pirate Port Quest Giver", QName = "PiratePortQuest",    QNum = 1, QPos = CFrame.new(-290.07, 42.90, 5581.59),    MPos = CFrame.new(-245.99, 47.31, 5584.10)},
+    {Min = 1525, Max = 1574, Mob = "Pistol Billionaire",    NPC = "Pirate Port Quest Giver", QName = "PiratePortQuest",    QNum = 2, QPos = CFrame.new(-290.07, 42.90, 5581.59),    MPos = CFrame.new(-187.33, 86.24, 6013.51)},
+    {Min = 1575, Max = 1599, Mob = "Dragon Crew Warrior",   NPC = "Dragon Crew Quest Giver", QName = "AmazonQuest",        QNum = 1, QPos = CFrame.new(5832.84, 51.69, -1101.52),   MPos = CFrame.new(6141.14, 51.35, -1340.74)},
+    {Min = 1600, Max = 1624, Mob = "Dragon Crew Archer",    NPC = "Dragon Crew Quest Giver", QName = "AmazonQuest",        QNum = 2, QPos = CFrame.new(5832.84, 51.69, -1101.52),   MPos = CFrame.new(6616.42, 441.77, 446.05)},
+    {Min = 1625, Max = 1649, Mob = "Female Islander",       NPC = "Amazon Quest Giver",      QName = "AmazonQuest2",       QNum = 1, QPos = CFrame.new(5448.86, 601.52, 751.13),    MPos = CFrame.new(4685.26, 735.81, 815.34)},
+    {Min = 1650, Max = 1699, Mob = "Giant Islander",        NPC = "Amazon Quest Giver",      QName = "AmazonQuest2",       QNum = 2, QPos = CFrame.new(5448.86, 601.52, 751.13),    MPos = CFrame.new(4729.09, 590.44, -36.98)},
+    {Min = 1700, Max = 1724, Mob = "Marine Commodore",      NPC = "Marine Tree Quest Giver", QName = "MarineTreeIsland",   QNum = 1, QPos = CFrame.new(2180.54, 27.82, -6741.55),   MPos = CFrame.new(2286.01, 73.13, -7159.81)},
+    {Min = 1725, Max = 1774, Mob = "Marine Rear Admiral",   NPC = "Marine Tree Quest Giver", QName = "MarineTreeIsland",   QNum = 2, QPos = CFrame.new(2180.54, 27.82, -6741.55),   MPos = CFrame.new(3656.77, 160.52, -7001.60)},
+    {Min = 1775, Max = 1799, Mob = "Fishman Raider",        NPC = "Turtle Adventurer",       QName = "DeepForestIsland3",  QNum = 1, QPos = CFrame.new(-10581.66, 330.87, -8761.19),MPos = CFrame.new(-10407.53, 331.76, -8368.52)},
+    {Min = 1800, Max = 1824, Mob = "Fishman Captain",       NPC = "Turtle Adventurer",       QName = "DeepForestIsland3",  QNum = 2, QPos = CFrame.new(-10581.66, 330.87, -8761.19),MPos = CFrame.new(-10994.70, 352.38, -9002.11)},
+    {Min = 1825, Max = 1849, Mob = "Forest Pirate",         NPC = "Deep Forest Quest Giver", QName = "DeepForestIsland",   QNum = 1, QPos = CFrame.new(-13234.04, 331.49, -7625.40),MPos = CFrame.new(-13479.40, 332.40, -7769.58)},
+    {Min = 1850, Max = 1899, Mob = "Mythological Pirate",   NPC = "Deep Forest Quest Giver", QName = "DeepForestIsland",   QNum = 2, QPos = CFrame.new(-13234.04, 331.49, -7625.40),MPos = CFrame.new(-13680.61, 501.08, -6991.19)},
+    {Min = 1900, Max = 1924, Mob = "Jungle Pirate",         NPC = "Deep Forest Area 2 Quest Giver", QName = "DeepForestIsland2", QNum = 1, QPos = CFrame.new(-12680.38, 389.97, -9902.02), MPos = CFrame.new(-12256.16, 331.74, -10485.84)},
+    {Min = 1925, Max = 1974, Mob = "Musketeer Pirate",      NPC = "Deep Forest Area 2 Quest Giver", QName = "DeepForestIsland2", QNum = 2, QPos = CFrame.new(-12680.38, 389.97, -9902.02), MPos = CFrame.new(-13457.90, 391.55, -9859.18)},
+    {Min = 1975, Max = 1999, Mob = "Reborn Skeleton",       NPC = "Haunted Castle Quest Giver 1", QName = "HauntedQuest1", QNum = 1, QPos = CFrame.new(-9479.22, 141.22, 5566.09),  MPos = CFrame.new(-8763.72, 165.72, 6159.86)},
+    {Min = 2000, Max = 2024, Mob = "Living Zombie",         NPC = "Haunted Castle Quest Giver 1", QName = "HauntedQuest1", QNum = 2, QPos = CFrame.new(-9479.22, 141.22, 5566.09),  MPos = CFrame.new(-10144.13, 138.63, 5838.09)},
+    {Min = 2025, Max = 2049, Mob = "Demonic Soul",          NPC = "Haunted Castle Quest Giver 2", QName = "HauntedQuest2", QNum = 1, QPos = CFrame.new(-9516.99, 172.02, 6078.47),  MPos = CFrame.new(-9505.87, 172.10, 6158.99)},
+    {Min = 2050, Max = 2074, Mob = "Posessed Mummy",        NPC = "Haunted Castle Quest Giver 2", QName = "HauntedQuest2", QNum = 2, QPos = CFrame.new(-9516.99, 172.02, 6078.47),  MPos = CFrame.new(-9582.02, 6.25, 6205.48)},
+    {Min = 2075, Max = 2099, Mob = "Peanut Scout",          NPC = "Peanut Quest Giver",      QName = "NutsIslandQuest",    QNum = 1, QPos = CFrame.new(-2104.39, 38.10, -10194.22), MPos = CFrame.new(-2143.24, 47.72, -10029.99)},
+    {Min = 2100, Max = 2124, Mob = "Peanut President",      NPC = "Peanut Quest Giver",      QName = "NutsIslandQuest",    QNum = 2, QPos = CFrame.new(-2104.39, 38.10, -10194.22), MPos = CFrame.new(-1859.35, 38.10, -10422.43)},
+    {Min = 2125, Max = 2149, Mob = "Ice Cream Chef",        NPC = "Ice Cream Quest Giver",   QName = "IceCreamIslandQuest",QNum = 1, QPos = CFrame.new(-820.65, 65.82, -10965.80),  MPos = CFrame.new(-641.89, 126.92, -11062.88)},
+    {Min = 2150, Max = 2199, Mob = "Ice Cream Commander",   NPC = "Ice Cream Quest Giver",   QName = "IceCreamIslandQuest",QNum = 2, QPos = CFrame.new(-820.65, 65.82, -10965.80),  MPos = CFrame.new(-558.06, 112.05, -11290.77)},
+    {Min = 2200, Max = 2224, Mob = "Cookie Crafter",        NPC = "Cake Quest Giver 1",      QName = "CakeQuest1",         QNum = 1, QPos = CFrame.new(-2021.32, 37.80, -12028.73), MPos = CFrame.new(-2374.90, 37.80, -12125.31)},
+    {Min = 2225, Max = 2249, Mob = "Cake Guard",            NPC = "Cake Quest Giver 1",      QName = "CakeQuest1",         QNum = 2, QPos = CFrame.new(-2021.32, 37.80, -12028.73), MPos = CFrame.new(-1598.31, 43.77, -12244.58)},
+    {Min = 2250, Max = 2274, Mob = "Baking Staff",          NPC = "Cake Quest Giver 2",      QName = "CakeQuest2",         QNum = 1, QPos = CFrame.new(-1927.92, 37.80, -12842.54), MPos = CFrame.new(-1887.81, 77.62, -12998.35)},
+    {Min = 2275, Max = 2299, Mob = "Head Baker",            NPC = "Cake Quest Giver 2",      QName = "CakeQuest2",         QNum = 2, QPos = CFrame.new(-1927.92, 37.80, -12842.54), MPos = CFrame.new(-2216.19, 82.88, -12869.29)},
+    {Min = 2300, Max = 2324, Mob = "Cocoa Warrior",         NPC = "Chocolate Quest Giver 1", QName = "ChocQuest1",         QNum = 1, QPos = CFrame.new(233.23, 29.88, -12201.23),   MPos = CFrame.new(-21.55, 80.57, -12352.39)},
+    {Min = 2325, Max = 2349, Mob = "Chocolate Bar Battler", NPC = "Chocolate Quest Giver 1", QName = "ChocQuest1",         QNum = 2, QPos = CFrame.new(233.23, 29.88, -12201.23),   MPos = CFrame.new(582.59, 77.19, -12463.16)},
+    {Min = 2350, Max = 2374, Mob = "Sweet Thief",           NPC = "Chocolate Quest Giver 2", QName = "ChocQuest2",         QNum = 1, QPos = CFrame.new(150.51, 30.69, -12774.50),   MPos = CFrame.new(165.19, 76.06, -12600.84)},
+    {Min = 2375, Max = 2399, Mob = "Candy Rebel",           NPC = "Chocolate Quest Giver 2", QName = "ChocQuest2",         QNum = 2, QPos = CFrame.new(150.51, 30.69, -12774.50),   MPos = CFrame.new(134.87, 77.25, -12876.55)},
+    {Min = 2400, Max = 2424, Mob = "Candy Pirate",          NPC = "Candy Pirate Quest Giver",QName = "CandyQuest1",        QNum = 1, QPos = CFrame.new(-1150.04, 20.38, -14446.33), MPos = CFrame.new(-1310.50, 26.02, -14562.40)},
+    {Min = 2425, Max = 2449, Mob = "Snow Demon",            NPC = "Candy Pirate Quest Giver",QName = "CandyQuest1",        QNum = 2, QPos = CFrame.new(-1150.04, 20.38, -14446.33), MPos = CFrame.new(-880.20, 71.25, -14538.61)},
+    {Min = 2450, Max = 2474, Mob = "Isle Outlaw",           NPC = "Tiki Quest Giver 1",      QName = "TikiQuest1",         QNum = 1, QPos = CFrame.new(-16547.75, 61.14, -173.41),  MPos = CFrame.new(-16442.81, 116.14, -264.46)},
+    {Min = 2475, Max = 2499, Mob = "Island Boy",            NPC = "Tiki Quest Giver 1",      QName = "TikiQuest1",         QNum = 2, QPos = CFrame.new(-16547.75, 61.14, -173.41),  MPos = CFrame.new(-16901.26, 84.07, -192.89)},
+    {Min = 2500, Max = 2524, Mob = "Sun-kissed Warrior",    NPC = "Tiki Quest Giver 2",      QName = "TikiQuest2",         QNum = 1, QPos = CFrame.new(-16539.08, 55.69, 1051.57),  MPos = CFrame.new(-16347.00, 64.08, 984.47)},
+    {Min = 2525, Max = 3000, Mob = "Isle Champion",         NPC = "Tiki Quest Giver 2",      QName = "TikiQuest2",         QNum = 2, QPos = CFrame.new(-16539.08, 55.69, 1051.57),  MPos = CFrame.new(-16641.68, 235.78, 1031.28)}
+}
+
+local ActiveQuests = QuestsSea1
+local CurrentSeaNum = 1
+if PlaceId == Sea2_PlaceId then
+    ActiveQuests = QuestsSea2
+    CurrentSeaNum = 2
+elseif PlaceId == Sea3_PlaceId then
+    ActiveQuests = QuestsSea3
+    CurrentSeaNum = 3
+end
+
+local Sea1Portals = {
+    FishmanInside  = Vector3.new(61163.8515625, 11.6796875, 1819.7841796875),
+    FishmanOutside = Vector3.new(3864.6884765625, 6.73695755, -1926.2141113),
+    SkyTemple      = Vector3.new(-4607.82275, 872.54248, -1667.55688),
+    SkyUpperYard   = Vector3.new(-7894.617675, 5547.14160, -380.291198)
+}
+
+-- ============================================================================
+-- 4. ОДНОРАЗОВЫЙ ПОИСК ПУСТОГО СЕРВЕРА (1 ИГРОК) НА СТАРТЕ (ДЛЯ PROJEKT REAL)
+-- ============================================================================
+local function hasMyBotCollision()
+    local myName = LocalPlayer.Name
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Name ~= myName then
+            for _, botName in ipairs(Config.MyBotNames) do
+                if plr.Name == botName then
+                    return true, plr.Name
+                end
+            end
+        end
+    end
+    return false, nil
+end
+
+local IsSeekingEmptyServer = false
+local function jumpToLowestPopServerOnce()
+    if IsSeekingEmptyServer or not isRunActive() then return end
+    IsSeekingEmptyServer = true
+
+    -- Способ 1: Прямой запрос к публичному API Roblox с сортировкой по возрастанию (Asc = 1 игрок на сервере!)
+    local jumped = false
+    pcall(function()
+        local url = string.format(
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100&excludeFullGames=true",
+            PlaceId
+        )
+        local raw = game:HttpGet(url)
+        if type(raw) == "string" and #raw > 10 then
+            local decoded = HttpService:JSONDecode(raw)
+            if type(decoded) == "table" and type(decoded.data) == "table" then
+                local candidates = {}
+                for _, srv in ipairs(decoded.data) do
+                    if type(srv) == "table"
+                        and type(srv.id) == "string"
+                        and srv.id ~= game.JobId
+                        and tonumber(srv.playing)
+                        and tonumber(srv.playing) >= 1
+                        and tonumber(srv.playing) <= 2 then
+                        table.insert(candidates, srv.id)
+                    end
+                end
+                if #candidates > 0 then
+                    -- Берем случайный из самых пустых (1-2 игрока), чтобы 45 окон не прыгнули в один и тот же первый слот
+                    local chosenJobId = candidates[math.random(1, #candidates)]
+                    jumped = true
+                    TeleportService:TeleportToPlaceInstance(PlaceId, chosenJobId, LocalPlayer)
+                end
+            end
+        end
+    end)
+
+    -- Способ 2 (Fallback): Внутриигровой браузер серверов Blox Fruits
+    if not jumped then
+        pcall(function()
+            local sb = ReplicatedStorage:FindFirstChild("__ServerBrowser")
+            if sb then
+                local list = sb:InvokeServer(math.random(5, 10))
+                if type(list) == "table" then
+                    for jobId, info in pairs(list) do
+                        if tostring(jobId) ~= tostring(game.JobId) and type(info) == "table" and tonumber(info.Count) and info.Count <= 2 then
+                            jumped = true
+                            sb:InvokeServer("teleport", jobId)
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    task.wait(10)
+    IsSeekingEmptyServer = false
+end
+
+-- ============================================================================
+-- 5. REMOTES, ДАННЫЕ И КАЛЬКУЛЯТОР ЦЕНЫ АККАУНТА FUNPAY (-13% КОМИССИЯ)
+-- ============================================================================
+local CachedCommF = nil
+local function getCommF()
+    if CachedCommF and CachedCommF.Parent then
+        return CachedCommF
+    end
+    local rem = ReplicatedStorage:FindFirstChild("Remotes")
+    CachedCommF = rem and rem:FindFirstChild("CommF_")
+    return CachedCommF
+end
+
+local function formatNumber(n)
+    local s = tostring(math.floor(tonumber(n) or 0))
+    return s:reverse():gsub("(%d%d%d)", "%1 "):reverse():gsub("^ ", "")
+end
+
+local function recalculateFunPayValuation()
+    local d = LocalPlayer:FindFirstChild("Data")
+    local lvl = d and d:FindFirstChild("Level") and d.Level.Value or 1
+    local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
+
+    if not FSM.StartLevel then FSM.StartLevel = lvl end
+    if not FSM.StartBeli then FSM.StartBeli = beli end
+
+    local baseLvlEUR = 0.05
+    if lvl >= 2550 then
+        baseLvlEUR = 3.20
+    elseif lvl >= 2000 then
+        baseLvlEUR = 2.15 + ((lvl - 2000) / 550) * 1.05
+    elseif lvl >= 1500 then
+        baseLvlEUR = 1.40 + ((lvl - 1500) / 500) * 0.75
+    elseif lvl >= 700 then
+        baseLvlEUR = 0.55 + ((lvl - 700) / 800) * 0.85
+    else
+        baseLvlEUR = (lvl / 700) * 0.55
+    end
+
+    local beliBonusEUR = (beli / 10000000) * 0.22
+
+    local styleBonusEUR = 0
+    if AccountValuation.HasBlackLeg then styleBonusEUR = styleBonusEUR + 0.15 end
+    if AccountValuation.HasElectro then styleBonusEUR = styleBonusEUR + 0.20 end
+    if AccountValuation.HasFishmanKarate then styleBonusEUR = styleBonusEUR + 0.35 end
+    if AccountValuation.HasSuperhuman then styleBonusEUR = styleBonusEUR + 1.25 end
+
+    if (tick() - FSM.LastInventoryScan) >= 25.0 then
+        FSM.LastInventoryScan = tick()
+        task.spawn(function()
+            pcall(function()
+                local comm = getCommF()
+                if not comm then return end
+                local inv = comm:InvokeServer("getInventory")
+                if type(inv) == "table" then
+                    local totalFruits = 0
+                    local highValList = {}
+                    for _, item in ipairs(inv) do
+                        if type(item) == "table" and item.Type == "Blox Fruit" and type(item.Name) == "string" then
+                            totalFruits = totalFruits + 1
+                            local fVal = FruitMarketValueEUR[item.Name] or 0.12
+                            if fVal >= 0.45 then
+                                table.insert(highValList, { Name = item.Name, Eur = fVal })
+                            end
+                        end
+                    end
+                    AccountValuation.StoredFruitsCount = totalFruits
+                    AccountValuation.HighValueFruitsList = highValList
+                end
+            end)
+        end)
+    end
+
+    local fruitBonusEUR = 0
+    for _, f in ipairs(AccountValuation.HighValueFruitsList) do
+        fruitBonusEUR = fruitBonusEUR + f.Eur
+    end
+    local commonFruitsCount = math.max(0, AccountValuation.StoredFruitsCount - #AccountValuation.HighValueFruitsList)
+    fruitBonusEUR = fruitBonusEUR + (commonFruitsCount * 0.10)
+
+    -- «Godhuman Ready»: надбавка задана чистыми на руки, поэтому в брутто добавляем её с учётом комиссии
+    local godhumanBonusEUR = 0
+    if AccountValuation.GodhumanReady then
+        godhumanBonusEUR = Config.GodhumanReadyBonusNetEUR / (1.0 - Config.FunPayCommissionRate)
+    end
+
+    local grossEUR = baseLvlEUR + beliBonusEUR + styleBonusEUR + fruitBonusEUR + godhumanBonusEUR
+    local netEUR = grossEUR * (1.0 - Config.FunPayCommissionRate)
+
+    AccountValuation.GrossEUR = grossEUR
+    AccountValuation.NetEUR = netEUR
+    AccountValuation.NetRUB = netEUR * Config.EurToRub
+    AccountValuation.NetUAH = netEUR * Config.EurToUah
+
+    return lvl, beli
+end
+
+-- ============================================================================
+-- 6. HUD + ОТКРЫВАЕМОЕ ТАБЛО СТАТИСТИКИ И ОЦЕНКИ FUNPAY
+-- ============================================================================
+local StatusLabelRef = nil
+local SubInfoLabelRef = nil
+local MainFrameRef = nil
+local BoardFrameRef = nil
+local BoardLines = {}
+local LastBoardUpdate = 0
+
+-- force = true обновляет табло немедленно (кнопки/сборка HUD); обычные вызовы из logStatus не чаще раза в секунду
+local function updateStatsBoardUI(force)
+    if not BoardFrameRef or not BoardFrameRef.Visible then return end
+    if not force and (tick() - LastBoardUpdate) < 1.0 then return end
+    LastBoardUpdate = tick()
+    pcall(function()
+        local lvl, beli = recalculateFunPayValuation()
+        local elapsedMin = math.max(1, math.floor((os.clock() - FSM.SessionStartTime) / 60))
+        local gainedLvl = math.max(0, lvl - (FSM.StartLevel or lvl))
+        local gainedBeli = math.max(0, beli - (FSM.StartBeli or beli))
+
+        local topFruitsStr = "Копим гачу/дроп"
+        if #AccountValuation.HighValueFruitsList > 0 then
+            local names = {}
+            for i = 1, math.min(4, #AccountValuation.HighValueFruitsList) do
+                local shortName = string.gsub(AccountValuation.HighValueFruitsList[i].Name, "%-.*", "")
+                table.insert(names, shortName)
+            end
+            topFruitsStr = table.concat(names, ", ")
+        end
+
+        if BoardLines.LevelLine then
+            BoardLines.LevelLine.Text = string.format("Уровень: %d / %d (+%d за %d мин) | Игроков: %d", lvl, Config.MaxLevel, gainedLvl, elapsedMin, #Players:GetPlayers())
+        end
+        if BoardLines.BeliLine then
+            BoardLines.BeliLine.Text = string.format("Баланс Beli: $%s (+$%s)", formatNumber(beli), formatNumber(gainedBeli))
+        end
+        if BoardLines.FruitsLine then
+            BoardLines.FruitsLine.Text = string.format("Фруктов в хранилище: %d шт. [%s]", AccountValuation.StoredFruitsCount, topFruitsStr)
+        end
+        if BoardLines.GrossPriceLine then
+            BoardLines.GrossPriceLine.Text = string.format("Рынок FunPay (Брутто): %.2f € (~%d ₽)", AccountValuation.GrossEUR, math.floor(AccountValuation.GrossEUR * Config.EurToRub))
+        end
+        if BoardLines.NetPriceLine then
+            BoardLines.NetPriceLine.Text = string.format(
+                "ЧИСТЫМИ (-13%% ком.): %.2f € | %d ₽ | %d ₴",
+                AccountValuation.NetEUR,
+                math.floor(AccountValuation.NetRUB),
+                math.floor(AccountValuation.NetUAH)
+            )
+        end
+        if BoardLines.StyleLine then
+            local readyTag = AccountValuation.GodhumanReady and " | GODHUMAN READY" or ""
+            BoardLines.StyleLine.Text = string.format(
+                "Стиль: %s [%d/%d]%s",
+                tostring(AccountValuation.CurStyleName),
+                math.floor(AccountValuation.CurStyleMastery),
+                Config.StyleTargetMastery,
+                readyTag
+            )
+        end
+    end)
+end
+
+local function logStatus(msg, lvl, qName)
+    if not isRunActive() then return end
+    pcall(function()
+        if StatusLabelRef then
+            StatusLabelRef.Text = "Статус: " .. tostring(msg)
+        end
+        if SubInfoLabelRef and (lvl or qName) then
+            SubInfoLabelRef.Text = string.format(
+                "Sea %d | LVL: %s/%d | Квест: %s",
+                CurrentSeaNum,
+                tostring(lvl or "--"),
+                Config.MaxLevel,
+                tostring(qName or "--")
+            )
+        end
+        updateStatsBoardUI()
+    end)
+end
+
+local function buildHUD(onSwitchClicked)
+    local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not pGui or not isRunActive() then return end
+
+    for _, oldName in ipairs({
+        "OllieHudV2", "OllieHudV3", "OllieHudV4", "OllieHudV5",
+        "OllieHudV6", "OllieHudV7", "OllieHudV7_1", "OllieHudV7_2",
+        "OllieHudV8", "OllieHudV8_1", "OllieHudV8_7", "OllieHudV8_8",
+        "OllieHudV8_9", "OllieHudV8_9_1", "OllieHudV8_9_2", "OllieHudV8_9_3",
+        "OllieHudV8_9_4", "OllieHudV9_0", "OllieHudV10_0", "OllieHudV10_1", "OllieHudV10_2", "OllieHudV10_3", "OllieHudV10_4", "OllieHudV10_5", "OllieHudV10_6"
+    }) do
+        local old = pGui:FindFirstChild(oldName)
+        if old then old:Destroy() end
+    end
+
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "OllieHudV10_6"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 999999
+    screen.IgnoreGuiInset = true
+    screen.Parent = pGui
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 325, 0, 124)
+    main.Position = UDim2.new(0, 14, 0, 42)
+    main.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+    main.BorderSizePixel = 2
+    main.BorderColor3 = Color3.fromRGB(0, 255, 136)
+    main.Parent = screen
+    MainFrameRef = main
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, -12, 0, 22)
+    header.Position = UDim2.new(0, 6, 0, 4)
+    header.BackgroundTransparency = 1
+    header.Text = "OLLIE V10.6 [PROJEKT REAL FULL-AUTO]"
+    header.TextColor3 = Color3.fromRGB(0, 255, 136)
+    header.Font = Enum.Font.SourceSansBold
+    header.TextSize = 15
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = main
+
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -12, 0, 36)
+    status.Position = UDim2.new(0, 6, 0, 26)
+    status.BackgroundTransparency = 1
+    status.Text = "Статус: Инициализация..."
+    status.TextColor3 = Color3.fromRGB(240, 240, 240)
+    status.Font = Enum.Font.SourceSans
+    status.TextSize = 14
+    status.TextWrapped = true
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.TextYAlignment = Enum.TextYAlignment.Top
+    status.Parent = main
+    StatusLabelRef = status
+
+    local subinfo = Instance.new("TextLabel")
+    subinfo.Size = UDim2.new(1, -12, 0, 18)
+    subinfo.Position = UDim2.new(0, 6, 0, 64)
+    subinfo.BackgroundTransparency = 1
+    subinfo.Text = "Sea " .. tostring(CurrentSeaNum) .. " | LVL: -- | Квест: --"
+    subinfo.TextColor3 = Color3.fromRGB(175, 185, 205)
+    subinfo.Font = Enum.Font.SourceSans
+    subinfo.TextSize = 13
+    subinfo.TextXAlignment = Enum.TextXAlignment.Left
+    subinfo.Parent = main
+    SubInfoLabelRef = subinfo
+
+    local btnToggle = Instance.new("TextButton")
+    btnToggle.Size = UDim2.new(0, 146, 0, 28)
+    btnToggle.Position = UDim2.new(0, 8, 0, 88)
+    btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
+    btnToggle.BorderSizePixel = 0
+    btnToggle.Text = "ФАРМ: ВКЛ"
+    btnToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnToggle.Font = Enum.Font.SourceSansBold
+    btnToggle.TextSize = 14
+    btnToggle.Parent = main
+
+    local btnBoard = Instance.new("TextButton")
+    btnBoard.Size = UDim2.new(0, 155, 0, 28)
+    btnBoard.Position = UDim2.new(0, 162, 0, 88)
+    btnBoard.BackgroundColor3 = Color3.fromRGB(215, 140, 0)
+    btnBoard.BorderSizePixel = 0
+    btnBoard.Text = "ТАБЛО FUNPAY: ВКЛ"
+    btnBoard.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnBoard.Font = Enum.Font.SourceSansBold
+    btnBoard.TextSize = 14
+    btnBoard.Parent = main
+
+    local board = Instance.new("Frame")
+    board.Size = UDim2.new(0, 365, 0, 176)
+    board.Position = UDim2.new(0, 348, 0, 42)
+    board.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
+    board.BorderSizePixel = 2
+    board.BorderColor3 = Color3.fromRGB(255, 185, 0)
+    board.Visible = true
+    board.Parent = screen
+    BoardFrameRef = board
+
+    local bTitle = Instance.new("TextLabel")
+    bTitle.Size = UDim2.new(1, -12, 0, 22)
+    bTitle.Position = UDim2.new(0, 8, 0, 4)
+    bTitle.BackgroundTransparency = 1
+    bTitle.Text = "📊 БИРЖА FUNPAY & СТАТИСТИКА АККАУНТА"
+    bTitle.TextColor3 = Color3.fromRGB(255, 200, 40)
+    bTitle.Font = Enum.Font.SourceSansBold
+    bTitle.TextSize = 14
+    bTitle.TextXAlignment = Enum.TextXAlignment.Left
+    bTitle.Parent = board
+
+    local function makeBoardRow(yOffset, defaultText, color, bold)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -16, 0, 21)
+        lbl.Position = UDim2.new(0, 8, 0, yOffset)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = defaultText
+        lbl.TextColor3 = color or Color3.fromRGB(230, 235, 245)
+        lbl.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+        lbl.TextSize = 14
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = board
+        return lbl
+    end
+
+    BoardLines.LevelLine      = makeBoardRow(28, "Уровень: расчет...", Color3.fromRGB(230, 235, 245), false)
+    BoardLines.BeliLine       = makeBoardRow(50, "Баланс Beli: расчет...", Color3.fromRGB(120, 255, 150), false)
+    BoardLines.FruitsLine     = makeBoardRow(72, "Фруктов в хранилище: 0 шт.", Color3.fromRGB(190, 160, 255), false)
+    BoardLines.GrossPriceLine = makeBoardRow(96, "Рынок FunPay (Брутто): 0.00 €", Color3.fromRGB(200, 205, 215), false)
+    BoardLines.NetPriceLine   = makeBoardRow(120, "ЧИСТЫМИ (-13% ком.): 0.00 € | 0 ₽ | 0 ₴", Color3.fromRGB(255, 215, 0), true)
+    BoardLines.StyleLine      = makeBoardRow(144, "Стиль: -- [0/400]", Color3.fromRGB(150, 220, 255), false)
+
+    local lastToggle = 0
+    table.insert(Env.OllieV10_6_Connections, btnToggle.Activated:Connect(function()
+        if not isRunActive() or (tick() - lastToggle < 0.35) then return end
+        lastToggle = tick()
+        Env.OllieV10_6_Enabled = not Env.OllieV10_6_Enabled
+        if onSwitchClicked then onSwitchClicked(Env.OllieV10_6_Enabled) end
+        if Env.OllieV10_6_Enabled then
+            btnToggle.Text = "ФАРМ: ВКЛ"
+            btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
+            header.TextColor3 = Color3.fromRGB(0, 255, 136)
+            main.BorderColor3 = Color3.fromRGB(0, 255, 136)
+        else
+            btnToggle.Text = "ФАРМ: ПАУЗА"
+            btnToggle.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+            header.TextColor3 = Color3.fromRGB(255, 80, 80)
+            main.BorderColor3 = Color3.fromRGB(255, 80, 80)
+            status.Text = "Статус: На паузе"
+        end
+    end))
+
+    local lastBoardToggle = 0
+    table.insert(Env.OllieV10_6_Connections, btnBoard.Activated:Connect(function()
+        if not isRunActive() or (tick() - lastBoardToggle < 0.25) then return end
+        lastBoardToggle = tick()
+        board.Visible = not board.Visible
+        if board.Visible then
+            btnBoard.Text = "ТАБЛО FUNPAY: ВКЛ"
+            btnBoard.BackgroundColor3 = Color3.fromRGB(215, 140, 0)
+            updateStatsBoardUI(true)
+        else
+            btnBoard.Text = "ТАБЛО FUNPAY: СКРЫТО"
+            btnBoard.BackgroundColor3 = Color3.fromRGB(70, 75, 90)
+        end
+    end))
+
+    updateStatsBoardUI(true)
+end
+
+table.insert(Env.OllieV10_6_Connections, LocalPlayer.Idled:Connect(function()
+    if not isRunActive() then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        local camCF = (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame) or CFrame.new()
+        local rx, ry = math.random(350, 750), math.random(180, 420)
+        VirtualUser:Button2Down(Vector2.new(rx, ry), camCF)
+        task.wait(0.9 + (math.random(1, 5) / 10))
+        VirtualUser:Button2Up(Vector2.new(rx, ry), camCF)
+    end)
+end))
+
+-- ============================================================================
+-- 7. ВЫБОР КОМАНДЫ ИЗ ЛОББИ, КОДЫ 2X EXP И ПОИСК КВЕСТОВ
+-- ============================================================================
+local CodesRedeemed = false
+local function redeemAllExpCodesOnce()
+    if CodesRedeemed or not Config.AutoRedeemCodes then return end
+    CodesRedeemed = true
+    task.spawn(function()
+        task.wait(5.0 + math.random(1, 3))
+        local d = LocalPlayer:FindFirstChild("Data")
+        local lvl = d and d:FindFirstChild("Level") and d.Level.Value or 1
+        if lvl > 45 then return end
+
+        local rem = ReplicatedStorage:FindFirstChild("Remotes")
+        local redeemRemote = rem and rem:FindFirstChild("Redeem")
+        if not redeemRemote then return end
+
+        local expCodes = {
+            "Sub2CaptainMaui", "kittgaming", "Sub2Fer999",
+            "Enyu_is_Pro", "Magicbus", "JCWK", "Starcodeheo", "Bluxxy",
+            "SUB2GAMERROBOT_EXP1", "Sub2NoobMaster123", "Sub2OfficialNoobie",
+            "StrawHatMaine", "TantaiGaming", "Axiore", "TheGreatAce"
+        }
+        for _, code in ipairs(expCodes) do
+            if not isRunActive() then break end
+            pcall(function() redeemRemote:InvokeServer(code) end)
+            task.wait(1.0 + (math.random(0, 5) / 10))
+        end
+    end)
+end
+
+local function ensureTeamFromLobby()
+    if not LocalPlayer.Team or (LocalPlayer.Team.Name ~= "Pirates" and LocalPlayer.Team.Name ~= "Marines") then
+        logStatus("Вход из лобби: выбираем фракцию Pirates...")
+        pcall(function()
+            local comm = getCommF()
+            if comm then comm:InvokeServer("SetTeam", "Pirates") end
+        end)
+        task.wait(0.8)
+        return false
+    end
+    redeemAllExpCodesOnce()
+    return true
+end
+
+local CachedQuestObj = nil
+local LastFullQuestScan = 0
+local function isGuiChainVisible(obj, rootGui)
+    if not obj or not obj.Parent or not obj:IsA("GuiObject") or not obj.Visible then
+        return false
+    end
+    local parent = obj.Parent
+    while parent and parent ~= rootGui do
+        if parent:IsA("GuiObject") and not parent.Visible then
+            return false
+        end
+        parent = parent.Parent
+    end
+    return rootGui and rootGui.Enabled == true
+end
+
+local function getVisibleQuestObject()
+    if CachedQuestObj and CachedQuestObj.Parent then
+        local screenGui = CachedQuestObj:FindFirstAncestorOfClass("ScreenGui")
+        if screenGui and isGuiChainVisible(CachedQuestObj, screenGui) then
+            return CachedQuestObj, screenGui
+        end
+    end
+
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return nil, nil end
+
+    -- Быстрый путь: стандартная квест-панель PlayerGui.Main.Quest (без обхода всего PlayerGui на каждом тике)
+    local mainGui = pGui:FindFirstChild("Main")
+    local directQuest = mainGui and mainGui:FindFirstChild("Quest")
+    if directQuest and directQuest:IsA("GuiObject") and mainGui:IsA("ScreenGui") then
+        if isGuiChainVisible(directQuest, mainGui) then
+            CachedQuestObj = directQuest
+            return directQuest, mainGui
+        end
+        return nil, nil
+    end
+
+    -- Запасной путь (старый полный поиск), если Main.Quest не найден; не чаще раза в 2 секунды
+    if (tick() - LastFullQuestScan) < 2.0 then return nil, nil end
+    LastFullQuestScan = tick()
+
+    for _, gui in ipairs(pGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV10_6" then
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if obj.Name == "Quest" and obj:IsA("GuiObject") and obj.Visible then
+                    if isGuiChainVisible(obj, gui) then
+                        CachedQuestObj = obj
+                        return obj, gui
+                    end
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function isQuestGuiVisible()
+    local qObj = getVisibleQuestObject()
+    return qObj ~= nil
+end
+
+local function isQuestTextDefinitelyStale(qData)
+    local qObj, rootGui = getVisibleQuestObject()
+    if not qObj then return false end
+
+    local parts = {}
+    for _, desc in ipairs(qObj:GetDescendants()) do
+        if desc:IsA("TextLabel") and isGuiChainVisible(desc, rootGui) and type(desc.Text) == "string" and #desc.Text > 0 then
+            table.insert(parts, string.lower(desc.Text))
+        end
+    end
+    if #parts == 0 then return false end
+    local fullText = table.concat(parts, " | ")
+
+    local targetMobLower = string.lower(qData.Mob)
+    if string.find(fullText, targetMobLower, 1, true) then
+        return false
+    end
+
+    for _, other in ipairs(ActiveQuests) do
+        if other.Mob ~= qData.Mob then
+            local otherLower = string.lower(other.Mob)
+            if #otherLower > 4 and string.find(fullText, otherLower, 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Универсальная очистка диалогов (V10.5, правки V10.6): закрывает и окна с кнопками, и текстовые монологи без кнопок
+-- (например, реплики Escaped Prisoner), которые раньше оставляли бота висеть в диалоге.
+local DialogueContainerNames = { Dialogue = true, Conversation = true, Subtitle = true, ChatBubble = true }
+-- Только кнопки подтверждения. Option2 и Close в диалогах Blox Fruits - это отмена, их не нажимаем (V10.6)
+local DialogueButtonNames = { Option1 = true, Next = true, Accept = true, Confirm = true }
+local DialogueTries = {}
+local LastDialogueClear = 0
+local LastNeutralClick = 0
+
+local function neutralScreenClick()
+    if not Config.DialogueNeutralClick then return end
+    if (tick() - LastNeutralClick) < Config.DialogueNeutralClickCooldownSec then return end
+    LastNeutralClick = tick()
+    task.spawn(function()
+        pcall(function()
+            local cam = Workspace.CurrentCamera
+            local camCF = (cam and cam.CFrame) or CFrame.new()
+            local cx, cy = Config.DialogueNeutralClickX, Config.DialogueNeutralClickY
+            if cam and cam.ViewportSize then
+                cx = math.max(40, math.min(cx, cam.ViewportSize.X - 40))
+                cy = math.max(40, math.min(cy, cam.ViewportSize.Y - 40))
+            end
+            local clickPos = Vector2.new(cx, cy)
+            VirtualUser:CaptureController()
+            VirtualUser:Button1Down(clickPos, camCF)
+            task.wait(0.05)
+            VirtualUser:Button1Up(clickPos, camCF)
+        end)
+    end)
+end
+
+local function clearBlockingDialogue()
+    -- Рекурсивный поиск по всему PlayerGui дорогой, поэтому не чаще раза в секунду
+    if (tick() - LastDialogueClear) < 1.0 then return end
+    LastDialogueClear = tick()
+    pcall(function()
+        local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not pGui then return end
+
+        local closedAny = false
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV10_6" then
+                for _, obj in ipairs(gui:GetDescendants()) do
+                    if DialogueContainerNames[obj.Name] and obj:IsA("GuiObject") and obj.Visible then
+                        closedAny = true
+                        local tries = (DialogueTries[obj] or 0) + 1
+                        DialogueTries[obj] = tries
+
+                        -- 1) интерактивные кнопки внутри диалога
+                        local pressed = false
+                        if firesignal and tries <= Config.DialogueForceHideAfterTries then
+                            for _, btn in ipairs(obj:GetDescendants()) do
+                                if DialogueButtonNames[btn.Name] and btn:IsA("GuiButton") and btn.Visible then
+                                    pcall(function() firesignal(btn.Activated) end)
+                                    pcall(function() firesignal(btn.MouseButton1Click) end)
+                                    pressed = true
+                                    break -- одной кнопки подтверждения достаточно
+                                end
+                            end
+                        end
+
+                        -- 2) нет кнопок (монолог NPC) или кнопки не помогли за несколько попыток: скрываем сам контейнер
+                        if not pressed then
+                            pcall(function() obj.Visible = false end)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- забываем счётчики уже закрытых диалогов
+        for obj, _ in pairs(DialogueTries) do
+            if (not obj.Parent) or (not obj.Visible) then
+                DialogueTries[obj] = nil
+            end
+        end
+
+        if closedAny then
+            neutralScreenClick()
+        end
+    end)
+end
+
+local function mobNameMatches(enemyName, mobName)
+    local n, m = string.lower(enemyName), string.lower(mobName)
+    if string.sub(n, 1, #m) ~= m then return false end
+    local c = string.sub(n, #m + 1, #m + 1)
+    return c == "" or c == " " or c == "["
+end
+
+-- Dragon Breath недоступен, если Fragments меньше цены (бот сам Fragments не добывает). Если значение прочитать
+-- не удалось, считаем Dragon Breath доступным: бот пробует купить его напрямую, а страховочный клапан не даёт зависнуть.
+local function dragonBreathBlocked()
+    local d = LocalPlayer:FindFirstChild("Data")
+    local frag = d and d:FindFirstChild("Fragments")
+    local v = frag and tonumber(frag.Value)
+    return v ~= nil and v < Config.DragonClawFragmentCost
+end
+
+-- Цепочка стилей добита: Dark Step, Electric, Water Kung Fu на целевой мастери, а Dragon Breath и Superhuman
+-- тоже на целевой мастери, если Dragon Breath вообще доступен. Данные приходят из equipNewestOwnedStyle (ниже).
+local function styleChainDone()
+    if not Config.AutoRotateFightingStyles then return true end
+    local t = Config.StyleTargetMastery
+    local sm = AccountValuation.StyleMastery
+    local top = AccountValuation.StyleTopRank or 0
+    if top < 4 then return false end
+    if (sm[2] or 0) < t or (sm[3] or 0) < t or (sm[4] or 0) < t then return false end
+    if dragonBreathBlocked() then return true end
+    return (sm[5] or 0) >= t and (sm[6] or 0) >= t
+end
+
+local function getQuestByLevel()
+    local d = LocalPlayer:FindFirstChild("Data")
+    local l = d and d:FindFirstChild("Level")
+    local lvl = l and math.floor(l.Value) or 1
+
+    if Config.StopOnGoalCompleted and lvl >= Config.MaxLevel then
+        local extra = tonumber(Config.StyleGateMaxExtraLevels) or 0
+        local overCap = extra > 0 and lvl >= Config.MaxLevel + extra
+        if styleChainDone() or overCap then
+            return nil, lvl, "COMPLETED"
+        end
+        -- Стили ещё не на целевой мастери: фарм последнего квеста продолжается (код ниже)
+        if not FSM.StyleGateHintShown then
+            FSM.StyleGateHintShown = true
+            print(string.format("[OLLIE] %d LVL достигнут, но цепочка стилей не на %d Mastery: фарм продолжается (лимит %d LVL)",
+                Config.MaxLevel, Config.StyleTargetMastery, Config.MaxLevel + extra))
+        end
+    end
+
+    for i = 1, #ActiveQuests do
+        local q = ActiveQuests[i]
+        if lvl >= q.Min and lvl <= q.Max then
+            return q, lvl, "OK"
+        end
+    end
+
+    -- Уровень ниже первого квеста этого моря: берем первый квест, а не последний
+    if lvl < ActiveQuests[1].Min then
+        return ActiveQuests[1], lvl, "OK"
+    end
+
+    local maxInThisSea = ActiveQuests[#ActiveQuests].Max
+    if lvl > maxInThisSea then
+        if CurrentSeaNum == 1 and Config.AutoSea2Transition then
+            return ActiveQuests[#ActiveQuests], lvl, "AUTO_SEA2_TRANSITION"
+        elseif Config.ContinueFarmIfNextSeaLocked then
+            -- Безостановочный фарм на топовом квесте текущего моря вплоть до Config.MaxLevel (1750 LVL)
+            return ActiveQuests[#ActiveQuests], lvl, "OK"
+        else
+            return nil, lvl, "NEED_NEXT_SEA"
+        end
+    end
+
+    return ActiveQuests[#ActiveQuests], lvl, "OK"
+end
+
+local function getLiveNPCCFrame(qData)
+    local npcFolders = {
+        Workspace:FindFirstChild("NPCs"),
+        ReplicatedStorage:FindFirstChild("NPCs")
+    }
+
+    if qData.NPC then
+        local bestNamedCF = nil
+        local bestNamedDist = 260
+        for _, folder in ipairs(npcFolders) do
+            if folder then
+                for _, npc in ipairs(folder:GetChildren()) do
+                    if npc.Name == qData.NPC or npc.Name == "Quest Giver" then
+                        local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+                        if r then
+                            if not qData.QPos then
+                                return r.CFrame * CFrame.new(0, 0, -2.5)
+                            end
+                            local d = (r.Position - qData.QPos.Position).Magnitude
+                            if d < bestNamedDist then
+                                bestNamedDist = d
+                                bestNamedCF = r.CFrame * CFrame.new(0, 0, -2.5)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if bestNamedCF then
+            return bestNamedCF
+        end
+    end
+
+    if qData.QPos then
+        local bestCF = nil
+        local bestDist = 70
+        for _, folder in ipairs(npcFolders) do
+            if folder then
+                for _, npc in ipairs(folder:GetChildren()) do
+                    local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+                    if r then
+                        local d = (r.Position - qData.QPos.Position).Magnitude
+                        if d < bestDist then
+                            bestDist = d
+                            bestCF = r.CFrame * CFrame.new(0, 0, -2.5)
+                        end
+                    end
+                end
+            end
+        end
+        if bestCF then return bestCF end
+    end
+
+    return qData.QPos or CFrame.new()
+end
+
+local WaypointCache = { Key = "", Time = 0, List = {} }
+local function getMobSpawnWaypoints(qData)
+    local key = qData.QName .. "_" .. tostring(qData.QNum)
+    if WaypointCache.Key == key and (tick() - WaypointCache.Time) < 10.0 and #WaypointCache.List > 0 then
+        return WaypointCache.List
+    end
+
+    local points = {}
+    if qData.MPos then
+        table.insert(points, qData.MPos * CFrame.new(0, Config.HoverHeight, 0))
+    end
+
+    local worldOrigin = Workspace:FindFirstChild("_WorldOrigin")
+    local enemySpawns = worldOrigin and worldOrigin:FindFirstChild("EnemySpawns")
+    if enemySpawns then
+        for _, sp in ipairs(enemySpawns:GetChildren()) do
+            if mobNameMatches(sp.Name, qData.Mob) then
+                local pos = (sp:IsA("BasePart") and sp.Position)
+                    or (sp:IsA("Model") and sp.PrimaryPart and sp.PrimaryPart.Position)
+                if pos and (not qData.MPos or math.abs(pos.Y - qData.MPos.Position.Y) <= 120) then
+                    local hoverPos = pos + Vector3.new(0, Config.HoverHeight, 0)
+                    local dup = false
+                    for _, ex in ipairs(points) do
+                        if (ex.Position - hoverPos).Magnitude < 35 then dup = true break end
+                    end
+                    if not dup then
+                        table.insert(points, CFrame.new(hoverPos))
+                    end
+                end
+            end
+        end
+    end
+
+    if #points == 0 then
+        table.insert(points, getLiveNPCCFrame(qData) * CFrame.new(0, Config.HoverHeight, 0))
+    end
+
+    WaypointCache.Key = key
+    WaypointCache.Time = tick()
+    WaypointCache.List = points
+    return points
+end
+
+-- ============================================================================
+-- 8. СТЕЛС TWEEN-КОНТРОЛЛЕР ПЕРЕМЕЩЕНИЯ
+-- ============================================================================
+local ActiveTween = nil
+local LastTweenGoalPos = nil
+local LastStreamRequest = 0
+local StreamInFlight = false
+local LastPortalInvoke = 0
+local ZeroVec = Vector3.new(0, 0, 0)
+local HugeVec = Vector3.new(1e9, 1e9, 1e9)
+local DeadBoxVec = Vector3.new(1, 1, 1)
+
+local function requestStreamThrottled(targetPos, currentPos)
+    if not StreamInFlight and (tick() - LastStreamRequest) >= 1.0 then
+        LastStreamRequest = tick()
+        StreamInFlight = true
+        task.spawn(function()
+            pcall(function()
+                if currentPos and (targetPos - currentPos).Magnitude > 500 then
+                    local mid = currentPos + ((targetPos - currentPos).Unit * 420)
+                    LocalPlayer:RequestStreamAroundAsync(mid)
+                end
+                LocalPlayer:RequestStreamAroundAsync(targetPos)
+            end)
+            StreamInFlight = false
+        end)
+    end
+end
+
+local function ensureHoverBV(root)
+    if not root then return end
+    local bv = root:FindFirstChild("OllieBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "OllieBV"
+        bv.MaxForce = HugeVec
+        bv.Velocity = ZeroVec
+        bv.Parent = root
+    else
+        bv.Velocity = ZeroVec
+    end
+    pcall(function()
+        root.AssemblyLinearVelocity = ZeroVec
+        root.AssemblyAngularVelocity = ZeroVec
+    end)
+end
+
+local function stopTweenOnly()
+    if ActiveTween then
+        pcall(function() ActiveTween:Cancel() end)
+        ActiveTween = nil
+    end
+    LastTweenGoalPos = nil
+end
+
+local function stopTweenAndReleasePhysics(restoreCollide)
+    stopTweenOnly()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        local bv = root:FindFirstChild("OllieBV")
+        if bv then pcall(function() bv:Destroy() end) end
+        if restoreCollide then
+            pcall(function() root.CanCollide = true end)
+        end
+    end
+end
+Env.OllieV10_6_Cleanup = function()
+    stopTweenAndReleasePhysics(true)
+end
+
+buildHUD(function(enabled)
+    if not enabled then
+        stopTweenAndReleasePhysics(true)
+    end
+end)
+
+table.insert(Env.OllieV10_6_Connections, RunService.Stepped:Connect(function()
+    if not isRunActive() or not Env.OllieV10_6_Enabled or FSM.GroundedAtNPC or FSM.Completed then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if hum.Sit then hum.Sit = false end
+        if hum:GetState() == Enum.HumanoidStateType.Swimming then
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
+        end
+    end
+end))
+
+local function smartMoveTo(targetCFrame)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
+
+    local curPos = root.Position
+    local finalPos = targetCFrame.Position
+
+    if PlaceId == Sea1_PlaceId and (tick() - LastPortalInvoke) >= 4.0 then
+        local comm = getCommF()
+        if comm then
+            local portalVec = nil
+            if finalPos.X > 50000 and curPos.X < 40000 then
+                portalVec = Sea1Portals.FishmanInside
+            elseif finalPos.X < 40000 and curPos.X > 50000 then
+                portalVec = Sea1Portals.FishmanOutside
+            elseif finalPos.Y > 4500 and curPos.Y < 3500 then
+                portalVec = Sea1Portals.SkyUpperYard
+            elseif finalPos.Y > 680 and finalPos.Y < 1200 and curPos.Y < 500 and (curPos - finalPos).Magnitude > 2200 then
+                portalVec = Sea1Portals.SkyTemple
+            end
+            if portalVec then
+                LastPortalInvoke = tick()
+                stopTweenOnly()
+                ensureHoverBV(root)
+                pcall(function() comm:InvokeServer("requestEntrance", portalVec) end)
+                task.wait(1.0) -- сервер успевает телепортировать персонажа до нового Tween (V10.6)
+                return
+            end
+        end
+    end
+
+    ensureHoverBV(root)
+
+    local totalDist = (finalPos - curPos).Magnitude
+    local horizDist = Vector3.new(finalPos.X - curPos.X, 0, finalPos.Z - curPos.Z).Magnitude
+
+    if totalDist > 120 then
+        requestStreamThrottled(finalPos, curPos)
+    end
+
+    if totalDist <= 6.0 then
+        stopTweenOnly()
+        root.CFrame = targetCFrame
+        return
+    end
+
+    local waypointPos = finalPos
+    if horizDist > 160 then
+        local cruiseY = math.max(finalPos.Y + 35, Config.TravelClearanceY)
+        if curPos.X > 50000 or math.abs(curPos.Z) > 31000 then
+            -- Подводный город и трюм Cursed Ship: низкий потолок, крейсерская высота не выше finalPos.Y + 15 (V10.6)
+            cruiseY = finalPos.Y + 15
+        end
+        waypointPos = Vector3.new(finalPos.X, cruiseY, finalPos.Z)
+    end
+
+    if ActiveTween and LastTweenGoalPos and (LastTweenGoalPos - waypointPos).Magnitude < 4.0 then
+        if ActiveTween.PlaybackState == Enum.PlaybackState.Playing then
+            return
+        end
+    end
+
+    if ActiveTween then
+        pcall(function() ActiveTween:Cancel() end)
+    end
+
+    local moveDist = (waypointPos - curPos).Magnitude
+    local duration = math.max(moveDist / Config.FlightSpeed, 0.04)
+    local lookHoriz = Vector3.new(finalPos.X - waypointPos.X, 0, finalPos.Z - waypointPos.Z).Magnitude
+    local targetCF = (lookHoriz > 0.05) and CFrame.new(waypointPos, Vector3.new(finalPos.X, waypointPos.Y, finalPos.Z)) or (CFrame.new(waypointPos) * targetCFrame.Rotation)
+
+    LastTweenGoalPos = waypointPos
+    ActiveTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = targetCF })
+    ActiveTween:Play()
+end
+
+-- ============================================================================
+-- 9. БОЕВАЯ СИСТЕМА, СНАЙПЕР МИРОВЫХ ФРУКТОВ И 100% АВТО-ПЕРЕХОД В SEA 2
+-- ============================================================================
+local CachedRegAtk = nil
+local CachedRegHit = nil
+local CachedCFUpvalTable = nil
+local LastCFScan = 0
+
+table.insert(Env.OllieV10_6_Connections, LocalPlayer.CharacterAdded:Connect(function()
+    stopTweenAndReleasePhysics(false)
+    FSM.ActiveCombatMob = nil
+    FSM.GroundedAtNPC = false
+    FSM.IsHealingState = false
+    CachedQuestObj = nil
+    CachedCFUpvalTable = nil
+end))
+
+local function getCombatRemotes()
+    if CachedRegAtk and CachedRegAtk.Parent and CachedRegHit and CachedRegHit.Parent then
+        return CachedRegAtk, CachedRegHit
+    end
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    local net = modules and modules:FindFirstChild("Net")
+    if net then
+        CachedRegAtk = net:FindFirstChild("RE/RegisterAttack")
+        CachedRegHit = net:FindFirstChild("RE/RegisterHit")
+    end
+    return CachedRegAtk, CachedRegHit
+end
+
+local function getCombatFrameworkCtrl()
+    if CachedCFUpvalTable and CachedCFUpvalTable.activeController then
+        return CachedCFUpvalTable.activeController
+    end
+    if (tick() - LastCFScan) < 3.5 then return nil end
+    LastCFScan = tick()
+    pcall(function()
+        local cfScript = LocalPlayer:FindFirstChild("PlayerScripts") and LocalPlayer.PlayerScripts:FindFirstChild("CombatFramework")
+        if cfScript and debug and debug.getupvalues then
+            local cf = require(cfScript)
+            local upvals = debug.getupvalues(cf)
+            if upvals and type(upvals[2]) == "table" then
+                CachedCFUpvalTable = upvals[2]
+            end
+        end
+    end)
+    return CachedCFUpvalTable and CachedCFUpvalTable.activeController or nil
+end
+
+local FightingStyleNames = {
+    ["Combat"] = true,
+    ["Black Leg"] = true,
+    ["Dark Step"] = true,
+    ["Electro"] = true,
+    ["Electric"] = true,
+    ["Fishman Karate"] = true,
+    ["Water Kung Fu"] = true,
+    ["Dragon Breath"] = true,
+    ["Superhuman"] = true,
+    ["Death Step"] = true,
+    ["Sharkman Karate"] = true,
+    ["Electric Claw"] = true,
+    ["Dragon Talon"] = true,
+    ["Godhuman"] = true
+}
+
+-- Объявлена заранее: присваивается ниже, после таблицы StyleRank
+local equipNewestOwnedStyle = nil
+
+local function equipBestTool()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum or hum.Health <= 0 then return nil end
+
+    local eq = char:FindFirstChildOfClass("Tool")
+    if eq and (eq.ToolTip == Config.WeaponType or FightingStyleNames[eq.Name]) then
+        return eq
+    end
+
+    -- Идёт переход в Sea 2: Key в руках нужен для двери Ice Admiral, поток атаки его не снимает (V10.6)
+    if eq and eq.Name == "Key" and (tick() - FSM.Sea2TransitionTick) < 3.0 then
+        return eq
+    end
+
+    -- Руки пустые (респавн/смерть): берём самый продвинутый купленный стиль, на котором ещё нет целевой мастери
+    if equipNewestOwnedStyle then
+        local styleTool = equipNewestOwnedStyle()
+        if styleTool then return styleTool end
+    end
+
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if item:IsA("Tool") and (item.ToolTip == Config.WeaponType or FightingStyleNames[item.Name]) then
+                hum:EquipTool(item)
+                return item
+            end
+        end
+    end
+    return char:FindFirstChildOfClass("Tool")
+end
+
+-- Порядок прокачки стилей (Black Leg = Dark Step, Electro = Electric, Fishman Karate = Water Kung Fu).
+-- equipBestTool оставляет в руках первый надетый стиль, поэтому после покупки нового стиля ротация
+-- застревала на старом. Эта функция надевает самый продвинутый из купленных стилей цепочки,
+-- на котором ещё нет Config.StyleTargetMastery (если все прокачаны, то самый продвинутый из купленных).
+-- Combat в выборе по мастери не участвует: он нужен только пока не куплен Black Leg.
+local StyleRank = {
+    ["Combat"] = 1,
+    ["Black Leg"] = 2, ["Dark Step"] = 2,
+    ["Electro"] = 3, ["Electric"] = 3,
+    ["Fishman Karate"] = 4, ["Water Kung Fu"] = 4,
+    ["Dragon Breath"] = 5, ["Dragon Claw"] = 5,
+    ["Superhuman"] = 6
+}
+
+equipNewestOwnedStyle = function()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hum or hum.Health <= 0 then return nil end
+
+    local target = Config.StyleTargetMastery
+    local pickTool, pickRank = nil, 0   -- самый продвинутый стиль, где мастери ещё меньше цели
+    local topTool, topRank = nil, 0     -- самый продвинутый из купленных (если все уже прокачаны)
+    local seen = {}                     -- ранги, чью мастери мы реально прочитали в этом проходе
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    for _, cont in ipairs({ char, bp }) do
+        if cont then
+            for _, item in ipairs(cont:GetChildren()) do
+                local rank = item:IsA("Tool") and StyleRank[item.Name]
+                if rank then
+                    local lvlObj = item:FindFirstChild("Level")
+                    local mastery = (lvlObj and tonumber(lvlObj.Value)) or 0
+                    AccountValuation.StyleMastery[rank] = mastery
+                    seen[rank] = true
+                    if rank > topRank then
+                        topTool, topRank = item, rank
+                    end
+                    if rank >= 2 and mastery < target and rank > pickRank then
+                        pickTool, pickRank = item, rank
+                    end
+                end
+            end
+        end
+    end
+
+    -- Реджойн: в руках/рюкзаке остаётся один стиль. Раз куплен стиль ранга R, предыдущие стили цепочки (2 .. R-1)
+    -- уже были добиты до целевой мастери, иначе бот не купил бы следующий (линейная прокачка). Зачитываем их.
+    if topRank > 2 then
+        for r = 2, topRank - 1 do
+            if not seen[r] then
+                AccountValuation.StyleMastery[r] = math.max(AccountValuation.StyleMastery[r] or 0, target)
+            end
+        end
+    end
+    AccountValuation.StyleTopRank = topRank
+
+    local chosen = pickTool or topTool
+    if chosen and chosen.Parent ~= char then
+        pcall(function() hum:EquipTool(chosen) end)
+    end
+    return chosen
+end
+
+-- «Godhuman Ready»: Dark Step, Electric, Water Kung Fu, Dragon Breath и Superhuman на целевой мастери.
+-- StyleChainDone (с учётом доступности Dragon Breath) нужен для остановки фарма на MaxLevel. Надбавка FunPay
+-- и метка GODHUMAN READY остаются строгими (нужен Superhuman), если не включён Config.GodhumanReadyWithoutDragon.
+local function updateGodhumanReady()
+    local sm = AccountValuation.StyleMastery
+    local t = Config.StyleTargetMastery
+    local full = (sm[2] or 0) >= t and (sm[3] or 0) >= t and (sm[4] or 0) >= t
+        and (sm[5] or 0) >= t and (sm[6] or 0) >= t
+    local chainDone = styleChainDone()
+    AccountValuation.StyleChainDone = chainDone
+    AccountValuation.GodhumanReady = full or (Config.GodhumanReadyWithoutDragon and chainDone and dragonBreathBlocked()) or false
+end
+
+local function storeAnyBackpackFruits()
+    local comm = getCommF()
+    if not comm then return end
+
+    local containers = { LocalPlayer:FindFirstChild("Backpack"), LocalPlayer.Character }
+    for _, cont in ipairs(containers) do
+        if cont then
+            for _, item in ipairs(cont:GetChildren()) do
+                if item:IsA("Tool") and (string.find(item.Name, "Fruit", 1, true) or item:GetAttribute("OriginalName")) then
+                    local origName = item:GetAttribute("OriginalName")
+                    if not origName then
+                        local clean = string.gsub(item.Name, " Fruit", "")
+                        origName = clean .. "-" .. clean
+                    end
+                    pcall(function()
+                        comm:InvokeServer("StoreFruit", origName, item)
+                    end)
+                end
+            end
+        end
+    end
+end
+
+-- Поиск заспавнившихся на карте фруктов (с чёрным списком недостижимых)
+local FruitBlacklist = {}
+local FruitTarget = nil
+local FruitSince = 0
+
+local function findWorldSpawnedFruit()
+    if not Config.AutoSnipeWorldFruits then return nil end
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Tool") and string.find(obj.Name, "Fruit", 1, true) then
+            local banUntil = FruitBlacklist[obj]
+            if not (banUntil and tick() < banUntil) then
+                local handle = obj:FindFirstChild("Handle")
+                if handle and handle:IsA("BasePart") and (handle.Position - root.Position).Magnitude <= Config.WorldFruitMaxDist then
+                    return obj, handle
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
+-- Таймаут урона по мобу и Anti-Stuck (V10.6): моб, которому мы не наносим урон, игнорируется на Config.MobIgnoreSec секунд
+local IgnoredMobs = {}          -- [моб] = tick(), до которого он игнорируется
+local LastMobDamageTick = 0     -- когда в последний раз здоровье текущего моба упало на MobDamageMinDrop
+local LastMobHealth = 0         -- базовое здоровье текущего моба для отсчёта урона
+local CurrentMobInstance = nil  -- моб, по которому сейчас идёт отсчёт
+
+local function findTargetMob(qData)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local refPos = (myRoot and myRoot.Position) or (qData.MPos and qData.MPos.Position) or Vector3.new()
+
+    -- чистим просроченные и исчезнувшие записи игнор-листа
+    local nowT = tick()
+    for ignoredMob, untilT in pairs(IgnoredMobs) do
+        if nowT >= untilT or not ignoredMob.Parent then
+            IgnoredMobs[ignoredMob] = nil
+        end
+    end
+
+    local bestMob = nil
+    local bestDist = math.huge
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if mobNameMatches(m.Name, qData.Mob) then
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            if mh and mr then
+                if mh.Health > 0 and mr.Position.Y > -300 and math.abs(mr.Position.Y - refPos.Y) <= 60 and not IgnoredMobs[m] then
+                    local d = (mr.Position - refPos).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        bestMob = m
+                    end
+                elseif mh.Health <= 0 and mr.Size.X > 4 then
+                    pcall(function() mr.Size = DeadBoxVec end)
+                end
+            end
+        end
+    end
+    return bestMob
+end
+
+local LastSimRadiusTime = 0
+local function pullMobsTogether(mobName, targetPos)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    local boxVec = Vector3.new(Config.MobHitboxSize, Config.MobHitboxSize, Config.MobHitboxSize)
+
+    if sethiddenproperty and (tick() - LastSimRadiusTime) >= 1.5 then
+        LastSimRadiusTime = tick()
+        pcall(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+        end)
+    end
+
+    for _, m in ipairs(enemies:GetChildren()) do
+        if mobNameMatches(m.Name, mobName) then
+            local mr = m:FindFirstChild("HumanoidRootPart")
+            local mh = m:FindFirstChildOfClass("Humanoid")
+            if mr and mh then
+                if mh.Health > 0 and (mr.Position - targetPos).Magnitude <= Config.MobPullMaxRadius then
+                    pcall(function()
+                        mr.CanCollide = false
+                        mr.Size = boxVec
+                        mr.Transparency = 0.85
+                        mr.AssemblyLinearVelocity = ZeroVec
+                        mh.WalkSpeed = 0
+                        mh.JumpPower = 0
+                        if Config.BringMobs and (mr.Position - targetPos).Magnitude > 1.2 then
+                            mr.CFrame = CFrame.new(targetPos)
+                        end
+                    end)
+                elseif mh.Health <= 0 and mr.Size.X > 4 then
+                    pcall(function() mr.Size = DeadBoxVec end)
+                end
+            end
+        end
+    end
+end
+
+local function executeAttack(mob)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not root then return end
+
+    if not char:FindFirstChild("HasBuso") and (tick() - FSM.LastBusoTry) >= Config.BusoRetryCooldown then
+        FSM.LastBusoTry = tick()
+        task.spawn(function()
+            pcall(function()
+                local comm = getCommF()
+                if comm then comm:InvokeServer("Buso") end
+            end)
+        end)
+    end
+
+    local tool = equipBestTool()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    pcall(function()
+        local regAtk, regHit = getCombatRemotes()
+        local enemies = Workspace:FindFirstChild("Enemies")
+        if regAtk and regHit and mob and mob:FindFirstChild("HumanoidRootPart") then
+            local targets = {}
+            if enemies then
+                for _, enemy in ipairs(enemies:GetChildren()) do
+                    local er = enemy:FindFirstChild("HumanoidRootPart")
+                    local eh = enemy:FindFirstChildOfClass("Humanoid")
+                    if er and eh and eh.Health > 0 and (er.Position - root.Position).Magnitude <= 70 then
+                        table.insert(targets, {enemy, er})
+                    end
+                end
+            end
+            if #targets == 0 then
+                table.insert(targets, {mob, mob.HumanoidRootPart})
+            end
+            regAtk:FireServer(0)
+            regHit:FireServer(mob.HumanoidRootPart, targets)
+        end
+    end)
+
+    pcall(function()
+        local ctrl = getCombatFrameworkCtrl()
+        if ctrl then
+            ctrl.timeToNextAttack = 0
+            ctrl.hitboxMagnitude = 65
+            ctrl:attack()
+        end
+    end)
+end
+
+-- 100% АВТОМАТИЧЕСКОЕ ПРОХОЖДЕНИЕ КВЕСТА НА ВТОРОЕ МОРЕ (SEA 1 -> SEA 2 НА 700 LVL)
+local LastSea2Check = 0
+local LastDetectiveNudge = 0
+local DoorArriveTick = 0
+local CachedDressrosaState = nil
+local LastDressrosaDump = ""
+local function runAutoSea2Transition(myLvl)
+    local comm = getCommF()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not comm or not root or not hum then return end
+
+    -- Метка для потока ротации стилей: пока идёт переход, он не снимает Key с рук
+    FSM.Sea2TransitionTick = tick()
+
+    if (tick() - LastSea2Check) >= 3.0 then
+        LastSea2Check = tick()
+        pcall(function()
+            CachedDressrosaState = comm:InvokeServer("DressrosaQuestProgress")
+            -- Отладка: печатаем состояние квеста при каждом изменении (удобно сверить поля таблицы)
+            if type(CachedDressrosaState) == "table" then
+                local okEnc, enc = pcall(function() return HttpService:JSONEncode(CachedDressrosaState) end)
+                if okEnc and type(enc) == "string" and enc ~= LastDressrosaDump then
+                    LastDressrosaDump = enc
+                    print("[OLLIE] DressrosaQuestProgress: " .. enc)
+                end
+            end
+        end)
+    end
+
+    if type(CachedDressrosaState) == "table" then
+        if CachedDressrosaState.KilledIceBoss == true then
+            logStatus("Босс Ice Admiral убит! Переход в Sea 2...", myLvl, "TRAVEL_SEA2")
+            pcall(function() comm:InvokeServer("TravelDressrosa") end)
+            task.wait(2.0)
+            return
+        end
+
+        if not CachedDressrosaState.TalkedDetective then
+            local detCF = CFrame.new(4849.29, 5.65, 719.61)
+            if (root.Position - detCF.Position).Magnitude > 12 then
+                smartMoveTo(detCF)
+                logStatus("Авто-Sea 2: Летим к Детективу в Тюрьму...", myLvl, "DETECTIVE")
+            else
+                stopTweenOnly()
+                root.CFrame = detCF
+                pcall(function() comm:InvokeServer("DressrosaQuestProgress", "Detective") end)
+                LastSea2Check = 0
+                task.wait(0.5)
+            end
+            return
+        end
+
+        if not CachedDressrosaState.UsedKey then
+            -- Цели боя нет: поток быстрой атаки (executeAttack -> equipBestTool) не должен надеть стиль вместо Key
+            FSM.ActiveCombatMob = nil
+            local bp = LocalPlayer:FindFirstChild("Backpack")
+            local keyTool = (bp and bp:FindFirstChild("Key")) or char:FindFirstChild("Key")
+            if not keyTool then
+                pcall(function() comm:InvokeServer("DressrosaQuestProgress", "Detective") end)
+                task.wait(0.5)
+                return
+            end
+            if keyTool.Parent == bp then
+                hum:EquipTool(keyTool)
+            end
+            local doorCF = CFrame.new(1347.71, 37.34, -1325.64)
+            if (root.Position - doorCF.Position).Magnitude > 10 then
+                DoorArriveTick = 0
+                smartMoveTo(doorCF)
+                logStatus("Авто-Sea 2: Несем ключ к двери Ice Admiral...", myLvl, "USE_KEY")
+            else
+                -- Дверь открывается ключом при подходе с экипированным Key (отдельного remote для этого нет)
+                stopTweenOnly()
+                if DoorArriveTick == 0 then DoorArriveTick = tick() end
+                local doorWait = tick() - DoorArriveTick
+                local doorTarget = doorCF
+                if doorWait > 8 then
+                    -- Дверь не открылась: каждые 3 секунды меняем позицию у двери, чтобы касание сработало заново
+                    local nudge = math.floor(doorWait / 3) % 3
+                    if nudge == 1 then
+                        doorTarget = doorCF * CFrame.new(0, 0, 6)
+                    elseif nudge == 2 then
+                        doorTarget = doorCF * CFrame.new(0, 0, -6)
+                    end
+                end
+                root.CFrame = doorTarget
+                logStatus("Авто-Sea 2: Ключ у двери, ждем открытия...", myLvl, "USE_KEY")
+                LastSea2Check = 0
+                task.wait(0.5)
+            end
+            return
+        end
+
+        -- Дверь открыта -> убиваем босса Ice Admiral
+        DoorArriveTick = 0
+        local iceBoss = findTargetMob({ Mob = "Ice Admiral", MPos = CFrame.new(1347.71, 37.34, -1325.64) })
+        if iceBoss and iceBoss:FindFirstChild("HumanoidRootPart") and iceBoss:FindFirstChildOfClass("Humanoid") then
+            FSM.ActiveCombatMob = iceBoss
+            local bPos = iceBoss.HumanoidRootPart.Position
+            smartMoveTo(CFrame.new(bPos + Vector3.new(0, Config.HoverHeight, Config.AttackBackOffset), bPos))
+            logStatus("Авто-Sea 2: Убиваем босса Ice Admiral!", myLvl, "ICE_ADMIRAL")
+        else
+            FSM.ActiveCombatMob = nil
+            local waitBossCF = CFrame.new(1347.71, 52.0, -1325.64)
+            smartMoveTo(waitBossCF)
+            logStatus("Авто-Sea 2: Ждем спавна Ice Admiral...", myLvl, "WAIT_ADMIRAL")
+        end
+    else
+        -- Если таблица прогресса не вернулась, пробуем напрямую поговорить с Детективом (не чаще раза в 3 секунды)
+        if (tick() - LastDetectiveNudge) >= 3.0 then
+            LastDetectiveNudge = tick()
+            pcall(function() comm:InvokeServer("DressrosaQuestProgress", "Detective") end)
+        end
+    end
+end
+
+-- Поток стелс-турбо атаки
+task.spawn(function()
+    while isRunActive() do
+        task.wait(Config.FastAttackInterval + (math.random(5, 22) / 1000))
+        if isRunActive() and Env.OllieV10_6_Enabled and not FSM.Completed and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
+            pcall(function()
+                local mh = FSM.ActiveCombatMob:FindFirstChildOfClass("Humanoid")
+                local mr = FSM.ActiveCombatMob:FindFirstChild("HumanoidRootPart")
+                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if mh and mr and root and mh.Health > 0 and (mr.Position - root.Position).Magnitude <= 68 then
+                    executeAttack(FSM.ActiveCombatMob)
+                end
+            end)
+        end
+    end
+end)
+
+-- ============================================================================
+-- 10. АВТО-СТАТЫ, РОТАЦИЯ БОЕВЫХ СТИЛЕЙ И ГАЧА ФРУКТОВ (6+ EUR)
+-- ============================================================================
+-- Ограничитель частоты попыток покупки боевых стилей
+local function canTryStyleBuy()
+    if (tick() - FSM.LastStyleBuyTry) < Config.StyleBuyCooldownSec then return false end
+    FSM.LastStyleBuyTry = tick()
+    return true
+end
+
+-- Покупка Dragon Breath (Dragon Claw) за Fragments: нужна для Superhuman.
+-- Последовательность вызовов "1" -> "2" такая же, как в кнопке Dragon Claw рабочих скриптов.
+local function doBuyDragonClaw(comm)
+    local checkReply, buyReply = nil, nil
+    pcall(function() checkReply = comm:InvokeServer("BlackbeardReward", "DragonClaw", "1") end)
+    pcall(function() buyReply = comm:InvokeServer("BlackbeardReward", "DragonClaw", "2") end)
+    print("[OLLIE] Dragon Breath: проверка = " .. tostring(checkReply) .. ", покупка = " .. tostring(buyReply))
+end
+
+-- Прямая покупка стиля без подлёта (учитель в другом море, подлёты выключены или не долетели за таймаут)
+local function buyStyleDirect(key)
+    local comm = getCommF()
+    if not comm then return end
+    if key == "DragonBreath" then
+        doBuyDragonClaw(comm)
+        return
+    end
+    local info = StyleTeachers[key]
+    if info and info.Remote then
+        pcall(function() comm:InvokeServer(info.Remote) end)
+    end
+end
+
+-- Заявка на покупку стиля: если учитель в этом море, главный цикл подлетит к нему один раз и купит
+local function requestStyleTrip(key)
+    if FSM.StyleTrip then return false end
+    local info = StyleTeachers[key]
+    if not info then return false end
+    if not canTryStyleBuy() then return false end
+    if Config.UseTeacherTrips and (info.Sea == CurrentSeaNum or info.Sea2Search) then
+        FSM.StyleTrip = { Key = key, Since = tick() }
+    else
+        buyStyleDirect(key)
+    end
+    return true
+end
+
+-- Dragon Breath: Fragments бот сам не добывает (они падают с рейдов). Если их меньше 1500, подлёт не
+-- заказывается, бот ничего не ждёт и продолжает фарм на текущем стиле.
+local function requestDragonBreath()
+    if CurrentSeaNum < 2 or FSM.StyleTrip then return end
+    if (tick() - FSM.LastDragonClawTry) < Config.DragonClawTryCooldownSec then return end
+
+    local d = LocalPlayer:FindFirstChild("Data")
+    local frag = d and d:FindFirstChild("Fragments")
+    local fragValue = frag and tonumber(frag.Value)
+    if fragValue and fragValue < Config.DragonClawFragmentCost then
+        if not FSM.DragonFragHintShown then
+            FSM.DragonFragHintShown = true
+            print(string.format("[OLLIE] Dragon Breath: Fragments %d/%d, бот продолжает фарм на текущем стиле", math.floor(fragValue), Config.DragonClawFragmentCost))
+        end
+        return
+    end
+
+    if fragValue then
+        if requestStyleTrip("DragonBreath") then
+            FSM.LastDragonClawTry = tick()
+        end
+    else
+        -- Значение Fragments прочитать не удалось: прямой вызов без подлёта, как в V10.3
+        FSM.LastDragonClawTry = tick()
+        buyStyleDirect("DragonBreath")
+    end
+end
+
+-- Координата учителя: NPC по имени рядом с заданной координатой, иначе сама координата.
+-- Учитель из другого моря (Sea2Search): NPC ищется по имени на всей карте, а если не найден, возвращается nil
+-- (главный цикл тогда покупает стиль напрямую, не гоняя бота по координатам чужого моря).
+local function getLiveTeacherCFrame(info)
+    local otherSea = (info.Sea ~= CurrentSeaNum)
+    local best, bestDist = nil, (otherSea and math.huge or 600)
+    local folders = { Workspace:FindFirstChild("NPCs"), ReplicatedStorage:FindFirstChild("NPCs") }
+    for _, folder in ipairs(folders) do
+        if folder then
+            for _, npc in ipairs(folder:GetChildren()) do
+                local lname = string.lower(npc.Name)
+                local matched = false
+                for _, n in ipairs(info.Names) do
+                    if lname == string.lower(n) then matched = true break end
+                end
+                if matched then
+                    local r = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+                    if r then
+                        local dd = (r.Position - info.CF.Position).Magnitude
+                        if dd < bestDist then
+                            bestDist = dd
+                            best = r.CFrame * CFrame.new(0, 0, -2.5)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if otherSea then return best end
+    return best or info.CF
+end
+
+task.spawn(function()
+    while isRunActive() and task.wait(4.0 + (math.random(0, 10) / 10)) do
+        if isRunActive() and Env.OllieV10_6_Enabled and not FSM.Completed then
+            local comm = getCommF()
+            if comm then
+                if Config.AutoStats then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local pts = d and d:FindFirstChild("Points")
+                        if pts and pts.Value > 0 then
+                            local spend = math.min(pts.Value, 60)
+                            local meleePts = math.ceil(spend * 0.68)
+                            local defPts = math.max(1, spend - meleePts)
+                            comm:InvokeServer("AddPoint", "Melee", meleePts)
+                            task.wait(0.12)
+                            comm:InvokeServer("AddPoint", "Defense", defPts)
+                        end
+                    end)
+                end
+
+                -- Во время перехода в Sea 2 ротацию стилей не трогаем (equipBestTool снял бы Key с рук)
+                if Config.AutoRotateFightingStyles and (tick() - FSM.Sea2TransitionTick) >= 3.0 then
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
+                        local tool = equipNewestOwnedStyle() or equipBestTool()
+                        local curMastery = (tool and tool:FindFirstChild("Level") and tool.Level.Value) or 0
+                        local curName = (tool and tool.Name) or ""
+                        local target = Config.StyleTargetMastery
+
+                        AccountValuation.CurStyleName = (curName ~= "" and curName) or "--"
+                        AccountValuation.CurStyleMastery = curMastery
+                        updateGodhumanReady()
+
+                        -- Линейная прокачка: следующий стиль покупается только когда текущий добит до target Mastery.
+                        -- Флаги Has* выставляются только по реально надетому стилю, а не после вызова покупки.
+                        if curName == "Combat" and beli >= 165000 then
+                            requestStyleTrip("BlackLeg")
+                        elseif curName == "Black Leg" or curName == "Dark Step" then
+                            AccountValuation.HasBlackLeg = true
+                            if curMastery >= target and beli >= 550000 then
+                                requestStyleTrip("Electro")
+                            end
+                        elseif curName == "Electro" or curName == "Electric" then
+                            AccountValuation.HasBlackLeg = true
+                            AccountValuation.HasElectro = true
+                            if curMastery >= target and beli >= 800000 then
+                                requestStyleTrip("FishmanKarate")
+                            end
+                        elseif curName == "Fishman Karate" or curName == "Water Kung Fu" then
+                            AccountValuation.HasBlackLeg = true
+                            AccountValuation.HasElectro = true
+                            AccountValuation.HasFishmanKarate = true
+                            if curMastery >= target and CurrentSeaNum >= 2 then
+                                requestDragonBreath()
+                            end
+                        elseif curName == "Dragon Breath" or curName == "Dragon Claw" then
+                            AccountValuation.HasBlackLeg = true
+                            AccountValuation.HasElectro = true
+                            AccountValuation.HasFishmanKarate = true
+                            if curMastery >= target and beli >= 3100000 and CurrentSeaNum >= 2 then
+                                requestStyleTrip("Superhuman")
+                            end
+                        elseif curName == "Superhuman" then
+                            AccountValuation.HasSuperhuman = true
+                        end
+                    end)
+                end
+
+                if Config.AutoRollAndStoreFruit and (tick() - FSM.LastGachaTry) >= Config.GachaIntervalSec then
+                    FSM.LastGachaTry = tick()
+                    pcall(function()
+                        local d = LocalPlayer:FindFirstChild("Data")
+                        local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
+                        if beli >= Config.MinBeliForFruitRoll then
+                            comm:InvokeServer("Cousin", "Buy")
+                            task.wait(0.8)
+                        end
+                        storeAnyBackpackFruits()
+                    end)
+                else
+                    pcall(storeAnyBackpackFruits)
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================================
+-- 10.5. WATCHDOG: ПРИНУДИТЕЛЬНЫЙ СБРОС ЗАВИСШЕГО СОСТОЯНИЯ (V10.6)
+-- ============================================================================
+-- Прогрессом считается рост уровня, смена опыта или рост Beli (сдача квеста и убийства дают и то и другое).
+-- Время вне обычного фарма (отхил, подлёт к учителю, сниппер фруктов, переход в Sea 2, пауза, ожидание спавна)
+-- в таймер не входит: если бот не был в обычном фарме больше 5 секунд, отсчёт начинается заново.
+local LastExpProgressTick = tick()
+local LastWatchdogPathTick = 0
+local LastWatchdogSample = 0
+local WatchdogSnapshot = { Level = nil, Exp = nil, Beli = nil }
+
+local function sampleFarmProgress()
+    local d = LocalPlayer:FindFirstChild("Data")
+    if not d then return end
+    local lvlObj = d:FindFirstChild("Level")
+    local expObj = d:FindFirstChild("Exp")
+    local beliObj = d:FindFirstChild("Beli")
+    local lvl = lvlObj and tonumber(lvlObj.Value) or nil
+    local exp = expObj and tonumber(expObj.Value) or nil
+    local beli = beliObj and tonumber(beliObj.Value) or nil
+
+    local snap = WatchdogSnapshot
+    local progressed = false
+    if snap.Level ~= nil and lvl ~= nil and lvl ~= snap.Level then progressed = true end
+    if snap.Exp ~= nil and exp ~= nil and exp ~= snap.Exp then progressed = true end
+    if snap.Beli ~= nil and beli ~= nil and beli > snap.Beli then progressed = true end
+    snap.Level, snap.Exp, snap.Beli = lvl, exp, beli
+
+    if progressed then
+        LastExpProgressTick = tick()
+    end
+end
+
+-- Возвращает true, если сработал сброс (главный цикл на этом тике заканчивается)
+local function watchdogCheck(myLvl)
+    local nowT = tick()
+    if (nowT - LastWatchdogPathTick) > 5 then
+        LastExpProgressTick = nowT
+    end
+    LastWatchdogPathTick = nowT
+
+    if (nowT - LastWatchdogSample) >= 1.0 then
+        LastWatchdogSample = nowT
+        sampleFarmProgress()
+    end
+
+    if (nowT - LastExpProgressTick) <= Config.WatchdogTimeoutSec then
+        return false
+    end
+
+    print("[OLLIE] WATCHDOG: нет прогресса уровня, опыта и Beli больше " .. tostring(Config.WatchdogTimeoutSec) .. " с. Сброс квеста и респавн персонажа")
+    logStatus("WATCHDOG: нет прогресса, сброс квеста и респавн", myLvl, "WATCHDOG")
+
+    local comm = getCommF()
+    if comm then
+        pcall(function() comm:InvokeServer("AbandonQuest") end)
+    end
+
+    -- возвращаем FSM в исходное состояние
+    FSM.ActiveCombatMob = nil
+    FSM.CurrentTrackedQuestKey = nil
+    FSM.ForceFarmExpireTime = 0
+    FSM.QuestTriesAtNPC = 0
+    FSM.GroundedAtNPC = false
+    FSM.IsHealingState = false
+    FSM.SafeHealCFrame = nil
+    FSM.StyleTrip = nil
+    CurrentMobInstance = nil
+    for ignoredMob, _ in pairs(IgnoredMobs) do
+        IgnoredMobs[ignoredMob] = nil
+    end
+    CachedQuestObj = nil
+    stopTweenAndReleasePhysics(false)
+
+    LastExpProgressTick = tick()
+
+    local char = LocalPlayer.Character
+    if char then
+        pcall(function() char:BreakJoints() end)
+    end
+    return true
+end
+
+-- ============================================================================
+-- 11. ГЛАВНЫЙ ЦИКЛ УПРАВЛЕНИЯ V10.6 [PROJEKT REAL FULL-AUTO]
+-- ============================================================================
+local LastSetSpawnIsland = ""
+
+task.spawn(function()
+    while isRunActive() and task.wait(Config.LoopInterval) do
+        if not isRunActive() or FSM.Completed then
+            stopTweenAndReleasePhysics(true)
+            break
+        end
+
+        local skipTick = false
+
+        -- 1. ОДНОРАЗОВАЯ ПРОВЕРКА ПУСТОГО СЕРВЕРА НА СТАРТЕ (ТОЛЬКО ПЕРВЫЕ 40 СЕКУНД)
+        if Config.StartupEmptyServerSeek and not FSM.StartupServerLocked then
+            local sinceStart = os.clock() - FSM.SessionStartTime
+            if sinceStart <= Config.StartupSeekWindowSec then
+                local botCollided, otherBotName = hasMyBotCollision()
+                local totalPlayers = #Players:GetPlayers()
+                if botCollided or totalPlayers > Config.MaxPlayersAllowedOnStart then
+                    FSM.ActiveCombatMob = nil
+                    stopTweenAndReleasePhysics(true)
+                    logStatus(string.format("Старт-фильтр: %d игр. (Бот: %s). Ищем сервер с 1 чел...", totalPlayers, tostring(otherBotName or "нет")))
+                    task.wait(math.random(2, 5))
+                    jumpToLowestPopServerOnce()
+                    task.wait(8)
+                    skipTick = true
+                else
+                    FSM.StartupServerLocked = true
+                end
+            else
+                FSM.StartupServerLocked = true
+            end
+        end
+
+        if skipTick then
+            -- тик пропущен: идёт поиск пустого сервера
+        elseif not Env.OllieV10_6_Enabled then
+            stopTweenAndReleasePhysics(true)
+            FSM.ActiveCombatMob = nil
+        else
+            pcall(function()
+                if not ensureTeamFromLobby() then return end
+
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+                if not char or not root or not hum or hum.Health <= 0 then
+                    stopTweenAndReleasePhysics(false)
+                    FSM.ActiveCombatMob = nil
+                    FSM.IsHealingState = false
+                    logStatus("Ожидание спавна персонажа...")
+                    return
+                end
+
+                clearBlockingDialogue()
+
+                -- HP-ЗАЩИТА (стоит выше сниппера фруктов и ветки перехода в Sea 2)
+                local hpRatio = hum.Health / math.max(hum.MaxHealth, 1)
+                if Config.SafeModeEnabled then
+                    if hpRatio < Config.LowHpThreshold and not FSM.IsHealingState then
+                        FSM.IsHealingState = true
+                        FSM.ActiveCombatMob = nil
+                        FSM.SafeHealCFrame = CFrame.new(root.Position.X, math.max(root.Position.Y + Config.SafeSkyOffset, 260), root.Position.Z)
+                    elseif FSM.IsHealingState and hpRatio >= Config.RecoverHpThreshold then
+                        FSM.IsHealingState = false
+                        FSM.SafeHealCFrame = nil
+                    end
+                else
+                    FSM.IsHealingState = false
+                end
+
+                if FSM.IsHealingState and FSM.SafeHealCFrame then
+                    FSM.GroundedAtNPC = false
+                    FSM.ActiveCombatMob = nil
+                    smartMoveTo(FSM.SafeHealCFrame)
+                    local dHeal = LocalPlayer:FindFirstChild("Data")
+                    local healLvl = dHeal and dHeal:FindFirstChild("Level") and dHeal.Level.Value or nil
+                    logStatus(string.format("ОТХИЛ [HP: %d%% / %d%%]", math.floor(hpRatio * 100), math.floor(Config.RecoverHpThreshold * 100)), healLvl, "HEAL")
+                    return
+                end
+
+                -- 2. АВТО-ПЕРЕХВАТ МИРОВЫХ ФРУКТОВ НА КАРТЕ (ПОДНИМАЕТ ЦЕНУ АККАУНТА ДО 6+ EUR)
+                local worldFruit, fruitHandle = findWorldSpawnedFruit()
+                if worldFruit and fruitHandle then
+                    if FruitTarget ~= worldFruit then
+                        FruitTarget = worldFruit
+                        FruitSince = tick()
+                    end
+                    if (tick() - FruitSince) > Config.FruitPickupTimeoutSec then
+                        -- Не удалось подобрать вовремя: игнорируем этот фрукт и чистим просроченные записи
+                        FruitBlacklist[worldFruit] = tick() + Config.FruitBlacklistSec
+                        for fruitObj, untilTime in pairs(FruitBlacklist) do
+                            if tick() > untilTime then FruitBlacklist[fruitObj] = nil end
+                        end
+                        FruitTarget = nil
+                        FSM.ActiveCombatMob = nil
+                        return
+                    end
+
+                    FSM.ActiveCombatMob = nil
+                    smartMoveTo(fruitHandle.CFrame)
+                    logStatus("СНАЙПЕР ФРУКТОВ: Забираем " .. tostring(worldFruit.Name))
+                    if (root.Position - fruitHandle.Position).Magnitude <= 12 then
+                        pcall(function() firetouchinterest(root, fruitHandle, 0) end)
+                        pcall(function() firetouchinterest(root, fruitHandle, 1) end)
+                        task.wait(0.3)
+                        storeAnyBackpackFruits()
+                    end
+                    return
+                else
+                    FruitTarget = nil
+                end
+
+                local qData, myLvl, status = getQuestByLevel()
+
+                if CurrentSeaNum == 2 and myLvl >= 1500 and not FSM.Sea3HintShown then
+                    FSM.Sea3HintShown = true
+                    print("[OLLIE] Sea 2: достигнут 1500 LVL. Sea 3 открывается вручную (King Red Head в Colosseum, Don Swan, Mr. Captain). Бот продолжает фарм до " .. tostring(Config.MaxLevel) .. " LVL.")
+                    pcall(function()
+                        StarterGui:SetCore("SendNotification", {
+                            Title = "OLLIE V10.6 [PROJEKT REAL]",
+                            Text = "1500 LVL: Sea 3 открывается вручную. Фарм продолжается.",
+                            Duration = 8
+                        })
+                    end)
+                end
+
+                if status == "COMPLETED" then
+                    -- Цель достигнута: полностью прекращаем перемещения и атаки (главный цикл, поток атаки и noclip
+                    -- проверяют FSM.Completed), персонаж остаётся на месте
+                    FSM.Completed = true
+                    Env.OllieV10_6_Enabled = false
+                    FSM.ActiveCombatMob = nil
+                    FSM.StyleTrip = nil
+                    stopTweenAndReleasePhysics(true)
+                    if MainFrameRef then MainFrameRef.BorderColor3 = Color3.fromRGB(255, 215, 0) end
+                    logStatus("ФАРМ ОКОНЧЕН — ДОСТИГНУТ " .. tostring(Config.MaxLevel) .. " УРОВЕНЬ!", myLvl, "COMPLETED")
+                    if not FSM.CompletionNotified then
+                        FSM.CompletionNotified = true
+                        -- «GODHUMAN READY» пишется только если пять стилей реально на целевой мастери
+                        local doneText = tostring(Config.MaxLevel) .. " LVL ДОСТИГНУТ! АККАУНТ ГОТОВ К ПРОДАЖЕ (GODHUMAN READY)"
+                        if not AccountValuation.GodhumanReady then
+                            if Config.AutoRotateFightingStyles and AccountValuation.StyleChainDone then
+                                doneText = tostring(Config.MaxLevel) .. " LVL ДОСТИГНУТ! Стили до Water Kung Fu на " .. tostring(Config.StyleTargetMastery) .. " Mastery, Dragon Breath недоступен (Fragments < " .. tostring(Config.DragonClawFragmentCost) .. "): GODHUMAN READY не набран"
+                            else
+                                doneText = tostring(Config.MaxLevel) .. " LVL ДОСТИГНУТ! Стили ещё не на " .. tostring(Config.StyleTargetMastery) .. " Mastery: GODHUMAN READY не набран"
+                            end
+                        end
+                        print("[OLLIE] " .. doneText)
+                        pcall(function()
+                            StarterGui:SetCore("SendNotification", {
+                                Title = "OLLIE V10.6 [PROJEKT REAL]",
+                                Text = doneText,
+                                Duration = 10
+                            })
+                        end)
+                    end
+                    return
+                elseif status == "AUTO_SEA2_TRANSITION" then
+                    runAutoSea2Transition(myLvl)
+                    return
+                elseif status == "NEED_NEXT_SEA" or not qData then
+                    stopTweenAndReleasePhysics(true)
+                    FSM.ActiveCombatMob = nil
+                    logStatus(
+                        string.format("Лимит Sea %d (LVL %d).", CurrentSeaNum, myLvl),
+                        myLvl,
+                        "NEXT SEA"
+                    )
+                    return
+                end
+
+                local expectedQuestKey = qData.QName .. "_" .. tostring(qData.QNum)
+
+                -- ОДНОРАЗОВЫЙ ПОДЛЁТ К УЧИТЕЛЮ СТИЛЯ (после HP-защиты и перехода в Sea 2, перед обычным фармом)
+                if FSM.StyleTrip then
+                    local trip = FSM.StyleTrip
+                    local info = StyleTeachers[trip.Key]
+                    if not info or (info.Sea ~= CurrentSeaNum and not info.Sea2Search) then
+                        FSM.StyleTrip = nil
+                    elseif (tick() - trip.Since) > Config.StyleTripTimeoutSec then
+                        FSM.StyleTrip = nil
+                        FSM.LastStyleBuyTry = tick()
+                        print("[OLLIE] Подлёт к учителю " .. info.Label .. " не удался за " .. tostring(Config.StyleTripTimeoutSec) .. " с: прямой вызов покупки")
+                        buyStyleDirect(trip.Key)
+                    else
+                        FSM.ActiveCombatMob = nil
+                        local teacherCF = getLiveTeacherCFrame(info)
+                        if not teacherCF then
+                            -- Учитель другого моря не найден среди NPC: летать некуда, покупка напрямую
+                            FSM.StyleTrip = nil
+                            FSM.LastStyleBuyTry = tick()
+                            print("[OLLIE] Учитель " .. info.Label .. " не найден в Sea " .. tostring(CurrentSeaNum) .. ": прямой вызов покупки")
+                            buyStyleDirect(trip.Key)
+                            return
+                        end
+                        local tDist = (root.Position - teacherCF.Position).Magnitude
+                        if tDist > Config.StyleTeacherReachDist then
+                            FSM.GroundedAtNPC = false
+                            smartMoveTo(teacherCF)
+                            logStatus(string.format("Летим к учителю: %s (%dм)", info.Label, math.floor(tDist)), myLvl, "STYLE_TRIP")
+                        else
+                            stopTweenOnly()
+                            FSM.StyleTrip = nil
+                            FSM.LastStyleBuyTry = tick()
+                            logStatus("Покупка стиля: " .. info.Label, myLvl, "STYLE_BUY")
+                            buyStyleDirect(trip.Key)
+                            task.wait(0.6)
+                        end
+                        return
+                    end
+                end
+
+                -- WATCHDOG: сюда доходит только обычный фарм (отхил, сниппер, Sea 2 и подлёт к учителю выше уже сделали return)
+                if watchdogCheck(myLvl) then
+                    return
+                end
+
+                local guiQuestActive = isQuestGuiVisible()
+
+                if guiQuestActive and (
+                    (FSM.CurrentTrackedQuestKey and FSM.CurrentTrackedQuestKey ~= expectedQuestKey)
+                    or (not FSM.CurrentTrackedQuestKey and isQuestTextDefinitelyStale(qData))
+                ) then
+                    local comm = getCommF()
+                    if comm then pcall(function() comm:InvokeServer("AbandonQuest") end) end
+                    FSM.CurrentTrackedQuestKey = nil
+                    FSM.ForceFarmExpireTime = 0
+                    task.wait(0.20)
+                    guiQuestActive = isQuestGuiVisible()
+                end
+
+                local hasActiveQuest = guiQuestActive or (tick() < FSM.ForceFarmExpireTime)
+
+                if not hasActiveQuest then
+                    FSM.ActiveCombatMob = nil
+                    local npcCF = getLiveNPCCFrame(qData)
+                    local npcDist = (root.Position - npcCF.Position).Magnitude
+
+                    if npcDist > 14.0 then
+                        FSM.GroundedAtNPC = false
+                        smartMoveTo(npcCF)
+                        logStatus(string.format("Летим к NPC (%dм)", math.floor(npcDist)), myLvl, expectedQuestKey)
+                    else
+                        stopTweenOnly()
+                        ensureHoverBV(root)
+                        FSM.GroundedAtNPC = true
+                        root.CFrame = npcCF
+                        task.wait(0.18)
+
+                        local comm = getCommF()
+                        if Config.AutoSetSpawnPoint and comm and LastSetSpawnIsland ~= qData.QName then
+                            LastSetSpawnIsland = qData.QName
+                            task.spawn(function()
+                                pcall(function() comm:InvokeServer("SetSpawnPoint") end)
+                            end)
+                        end
+
+                        local serverReply = nil
+                        if comm then
+                            pcall(function()
+                                serverReply = comm:InvokeServer("StartQuest", qData.QName, qData.QNum)
+                            end)
+                        end
+
+                        FSM.GroundedAtNPC = false
+                        FSM.QuestTriesAtNPC = FSM.QuestTriesAtNPC + 1
+                        FSM.CurrentTrackedQuestKey = expectedQuestKey
+                        logStatus("Взят квест #" .. tostring(FSM.QuestTriesAtNPC) .. " (" .. tostring(serverReply) .. ")", myLvl, expectedQuestKey)
+                        task.wait(0.18)
+
+                        if isQuestGuiVisible() or FSM.QuestTriesAtNPC >= 3 then
+                            if not isQuestGuiVisible() then
+                                FSM.ForceFarmExpireTime = tick() + 28
+                            end
+                            FSM.QuestTriesAtNPC = 0
+                        end
+                    end
+                else
+                    FSM.GroundedAtNPC = false
+                    FSM.QuestTriesAtNPC = 0
+                    FSM.CurrentTrackedQuestKey = expectedQuestKey
+
+                    local mob = findTargetMob(qData)
+                    if mob and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChildOfClass("Humanoid") then
+                        FSM.ActiveCombatMob = mob
+                        local mPos = mob.HumanoidRootPart.Position
+                        local attackPos = mPos + Vector3.new(0, Config.HoverHeight, Config.AttackBackOffset)
+
+                        smartMoveTo(CFrame.new(attackPos, mPos))
+
+                        -- ВЫСОТА В БОЮ: Y между игроком и мобом не больше HoverHeight + CombatYTolerance,
+                        -- чтобы бот не зависал над крышами башен и навесами
+                        local flatDist = Vector3.new(root.Position.X - mPos.X, 0, root.Position.Z - mPos.Z).Magnitude
+                        if flatDist <= Config.CombatYGuardHorizDist and (root.Position.Y - mPos.Y) > (Config.HoverHeight + Config.CombatYTolerance) then
+                            stopTweenOnly()
+                            root.CFrame = root.CFrame + Vector3.new(0, (mPos.Y + Config.HoverHeight) - root.Position.Y, 0)
+                        end
+
+                        -- ТАЙМАУТ УРОНА ПО МОБУ (Anti-Stuck): отсчёт идёт только пока мы в зоне боя
+                        local mobHum = mob:FindFirstChildOfClass("Humanoid")
+                        local mobHp = mobHum and mobHum.Health or 0
+                        local mobDist = (root.Position - mPos).Magnitude
+                        if CurrentMobInstance ~= mob or mobDist > Config.MobDamageEngageDist then
+                            CurrentMobInstance = mob
+                            LastMobHealth = mobHp
+                            LastMobDamageTick = tick()
+                        elseif (LastMobHealth - mobHp) >= Config.MobDamageMinDrop then
+                            LastMobHealth = mobHp
+                            LastMobDamageTick = tick()
+                        elseif mobHp > LastMobHealth then
+                            LastMobHealth = mobHp
+                        elseif (tick() - LastMobDamageTick) > Config.MobDamageTimeoutSec then
+                            IgnoredMobs[mob] = tick() + Config.MobIgnoreSec
+                            print("[OLLIE] Anti-Stuck: моб " .. tostring(mob.Name) .. " не получает урон " .. tostring(Config.MobDamageTimeoutSec) .. " с, игнорируем на " .. tostring(Config.MobIgnoreSec) .. " с")
+                            FSM.ActiveCombatMob = nil
+                            CurrentMobInstance = nil
+                            stopTweenOnly()
+                            root.CFrame = root.CFrame + Vector3.new(Config.AntiStuckShift, Config.AntiStuckShift, 0)
+                            return
+                        end
+
+                        logStatus("Бьем: " .. mob.Name .. " [HP: " .. tostring(math.floor(mob.Humanoid.Health)) .. "]", myLvl, expectedQuestKey)
+
+                        if (root.Position - mPos).Magnitude <= Config.MobPullEngageDist then
+                            pullMobsTogether(qData.Mob, mPos)
+                        end
+                    else
+                        FSM.ActiveCombatMob = nil
+                        local waypoints = getMobSpawnWaypoints(qData)
+                        if #waypoints > 1 and (tick() - FSM.LastPatrolSwitch) >= Config.SpawnPatrolInterval then
+                            FSM.LastPatrolSwitch = tick()
+                            FSM.PatrolIndex = (FSM.PatrolIndex % #waypoints) + 1
+                        end
+                        if FSM.PatrolIndex > #waypoints then FSM.PatrolIndex = 1 end
+
+                        local targetSpawnCF = waypoints[FSM.PatrolIndex]
+                        local waitDist = (root.Position - targetSpawnCF.Position).Magnitude
+                        smartMoveTo(targetSpawnCF)
+                        logStatus(
+                            string.format("Ждем респавн %s (%dм) [%d/%d]", qData.Mob, math.floor(waitDist), FSM.PatrolIndex, #waypoints),
+                            myLvl,
+                            expectedQuestKey
+                        )
+                    end
+                end
+            end)
+        end
+    end
+end)
