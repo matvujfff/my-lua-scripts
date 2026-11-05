@@ -1,5 +1,11 @@
--- [[ OLLIE BLOX FRUITS ENGINE V10.6 - PROJEKT REAL FULL-AUTO MONOLITH ]] --
+-- [[ OLLIE BLOX FRUITS ENGINE V10.6.3 - PROJEKT REAL FULL-AUTO MONOLITH ]] --
 -- Language: Lua 5.1 / Luau | Runtime: Projekt Real
+-- V10.6.3 = V10.6 + защита от «нет урона по мобам» (уровень и Beli не растут, у врага всегда 100 HP):
+--   * проба урона: если здоровье моба в зоне боя не падает Config.ClickFallbackAfterSec (3 с), в каждый цикл атаки
+--     добавляется запасной удар через VirtualUser (клик по центру экрана), он работает без remotes и без CombatFramework
+--   * диагностика в консоль (F9) строками [OLLIE][DIAG]: найдены ли RegisterAttack / RegisterHit, контроллер CombatFramework,
+--     debug.getupvalues, что в руках, Buso; печатается через 6 с после старта и при включении запасного удара (не чаще раза в 60 с)
+--   * самоочистка: версия 10.6 добавлена в списки старых версий (повторный Execute чистит HUD, потоки и коннекты)
 -- V10.6 = V10.5 + 8 точечных исправлений (остальное без изменений):
 --   * 1750 LVL: COMPLETED выдаётся только когда цепочка стилей на Config.StyleTargetMastery (400); пока нет - фарм последнего квеста идёт дальше
 --   * clearBlockingDialogue жмёт только Option1 / Accept / Confirm / Next, один раз (break); Option2 и Close (отмена) больше не нажимаются
@@ -89,7 +95,7 @@ for _ = 1, 5 do math.random() end
 -- CF: координаты учителя (заданы вручную, при необходимости правятся здесь).
 -- Names: имена NPC для поиска вживую рядом с этой координатой (если NPC найден, бот летит к нему, иначе по CF).
 -- Sea: в каком море учитель; Remote: remote покупки (для Dragon Breath используется BlackbeardReward / DragonClaw).
--- Sea2Search (V10.6): те же учителя стоят и в Sea 2 (Hot and Cold, у вулкана). Координат Sea 2 в источниках нет, поэтому
+-- Sea2Search (V10.6.3): те же учителя стоят и в Sea 2 (Hot and Cold, у вулкана). Координат Sea 2 в источниках нет, поэтому
 -- в Sea 2 учитель ищется по имени NPC без привязки к координате; если NPC не найден, покупка идёт напрямую без подлёта.
 local StyleTeachers = {
     BlackLeg = {
@@ -120,7 +126,7 @@ local StyleTeachers = {
 }
 
 -- ============================================================================
--- 0. АВТО-РОУТЕР ИЗ ЛОББИ И ОЧИСТКА СТАРЫХ ПОТОКОВ (V1 - V10.6)
+-- 0. АВТО-РОУТЕР ИЗ ЛОББИ И ОЧИСТКА СТАРЫХ ПОТОКОВ (V1 - V10.6.3)
 -- ============================================================================
 
 -- Ссылка на raw-версию ЭТОГО скрипта. Если заполнить, то после любого телепорта
@@ -145,7 +151,7 @@ local Sea3_PlaceId = 7449423635
 if PlaceId ~= Sea1_PlaceId and PlaceId ~= Sea2_PlaceId and PlaceId ~= Sea3_PlaceId then
     pcall(function()
         StarterGui:SetCore("SendNotification", {
-            Title = "OLLIE ENGINE V10.6 [PROJEKT REAL]",
+            Title = "OLLIE ENGINE V10.6.3 [PROJEKT REAL]",
             Text = "Внешнее лобби! Авто-вход в Blox Fruits...",
             Duration = 5
         })
@@ -162,20 +168,20 @@ for i = 1, 10 do
     Env["OllieV" .. i .. "_Running"] = false
     Env["OllieV" .. i .. "_Enabled"] = false
 end
-for _, subVer in ipairs({"8_1", "8_7", "8_8", "8_9", "8_9_1", "8_9_2", "8_9_3", "8_9_4", "9_0", "10_0", "10_1", "10_2", "10_3", "10_4", "10_5", "10_6"}) do
+for _, subVer in ipairs({"8_1", "8_7", "8_8", "8_9", "8_9_1", "8_9_2", "8_9_3", "8_9_4", "9_0", "10_0", "10_1", "10_2", "10_3", "10_4", "10_5", "10_6", "10_6_3"}) do
     Env["OllieV" .. subVer .. "_Running"] = false
     Env["OllieV" .. subVer .. "_Enabled"] = false
 end
 
-local MyRunId = (tonumber(Env.OllieV10_6_RunId) or 0) + 1
-Env.OllieV10_6_RunId = MyRunId
-Env.OllieV10_6_Running = true
-Env.OllieV10_6_Enabled = true
+local MyRunId = (tonumber(Env.OllieV10_6_3_RunId) or 0) + 1
+Env.OllieV10_6_3_RunId = MyRunId
+Env.OllieV10_6_3_Running = true
+Env.OllieV10_6_3_Enabled = true
 
 for _, cleanupKey in ipairs({
     "OllieV8_8_Cleanup", "OllieV8_9_Cleanup", "OllieV8_9_1_Cleanup",
     "OllieV8_9_2_Cleanup", "OllieV8_9_3_Cleanup", "OllieV8_9_4_Cleanup",
-    "OllieV9_0_Cleanup", "OllieV10_0_Cleanup", "OllieV10_1_Cleanup", "OllieV10_2_Cleanup", "OllieV10_3_Cleanup", "OllieV10_4_Cleanup", "OllieV10_5_Cleanup", "OllieV10_6_Cleanup"
+    "OllieV9_0_Cleanup", "OllieV10_0_Cleanup", "OllieV10_1_Cleanup", "OllieV10_2_Cleanup", "OllieV10_3_Cleanup", "OllieV10_4_Cleanup", "OllieV10_5_Cleanup", "OllieV10_6_Cleanup", "OllieV10_6_3_Cleanup"
 }) do
     if type(Env[cleanupKey]) == "function" then
         pcall(Env[cleanupKey])
@@ -187,7 +193,7 @@ for _, connKey in ipairs({
     "OllieV8_1_Connections", "OllieV8_7_Connections", "OllieV8_8_Connections",
     "OllieV8_9_Connections", "OllieV8_9_1_Connections", "OllieV8_9_2_Connections",
     "OllieV8_9_3_Connections", "OllieV8_9_4_Connections", "OllieV9_0_Connections",
-    "OllieV10_0_Connections", "OllieV10_1_Connections", "OllieV10_2_Connections", "OllieV10_3_Connections", "OllieV10_4_Connections", "OllieV10_5_Connections", "OllieV10_6_Connections"
+    "OllieV10_0_Connections", "OllieV10_1_Connections", "OllieV10_2_Connections", "OllieV10_3_Connections", "OllieV10_4_Connections", "OllieV10_5_Connections", "OllieV10_6_Connections", "OllieV10_6_3_Connections"
 }) do
     if type(Env[connKey]) == "table" then
         for _, conn in ipairs(Env[connKey]) do
@@ -197,22 +203,22 @@ for _, connKey in ipairs({
         end
     end
 end
-Env.OllieV10_6_Connections = {}
+Env.OllieV10_6_3_Connections = {}
 
 local function isRunActive()
-    return Env.OllieV10_6_Running == true and Env.OllieV10_6_RunId == MyRunId
+    return Env.OllieV10_6_3_Running == true and Env.OllieV10_6_3_RunId == MyRunId
 end
 
 pcall(function()
     StarterGui:SetCore("SendNotification", {
-        Title = "OLLIE V10.6 [PROJEKT REAL]",
+        Title = "OLLIE V10.6.3 [PROJEKT REAL]",
         Text = "100% Авто-Фарм + Авто Sea 2 + Пустой Сервер + Биржа FunPay!",
         Duration = 5
     })
 end)
 
 -- ============================================================================
--- 1. КОНФИГУРАЦИЯ V10.6 [PROJEKT REAL FULL-AUTO]
+-- 1. КОНФИГУРАЦИЯ V10.6.3 [PROJEKT REAL FULL-AUTO]
 -- ============================================================================
 local Config = {
     MyBotNames = {
@@ -253,9 +259,9 @@ local Config = {
     StyleTripTimeoutSec = 90,           -- Не долетели за 90 секунд: прямой вызов покупки и пауза
     GodhumanReadyBonusNetEUR = 3.80,    -- Надбавка к цене аккаунта «Godhuman Ready» (чистыми после комиссии)
 
-    -- Диалоги, Anti-Stuck и Watchdog (V10.6)
+    -- Диалоги, Anti-Stuck и Watchdog (V10.6.3)
     DialogueNeutralClick = true,        -- После закрытия диалога делать клик VirtualUser в пустой точке экрана, чтобы снять фокус с NPC
-    DialogueNeutralClickX = 600,        -- Точка клика (V10.6): не (0, 0), там системное меню Roblox. Зажимается в границы экрана
+    DialogueNeutralClickX = 600,        -- Точка клика (V10.6.3): не (0, 0), там системное меню Roblox. Зажимается в границы экрана
     DialogueNeutralClickY = 400,
     DialogueNeutralClickCooldownSec = 2,
     DialogueForceHideAfterTries = 3,    -- Если кнопки диалога не закрыли его за 3 попытки, контейнер скрывается принудительно
@@ -293,6 +299,8 @@ local Config = {
     RecoverHpThreshold = 0.80,
     SafeSkyOffset = 180,
     BusoRetryCooldown = 6.0,
+    ClickFallbackAfterSec = 3,          -- Моб рядом, а его HP не падает 3 секунды: включается запасной удар через VirtualUser
+    CombatDiagnostics = true,           -- Печатать [OLLIE][DIAG] в консоль (F9)
     SpawnPatrolInterval = 3.5,
 
     -- Рыночный калькулятор FunPay
@@ -321,6 +329,13 @@ local FSM = {
     DragonFragHintShown = false,
     Sea3HintShown = false,
     Sea2TransitionTick = 0,
+    ClickFallback = false,
+    LastClickFallback = 0,
+    DmgProbeMob = nil,
+    DmgProbeHp = 0,
+    DmgProbeTick = 0,
+    LastDiagTick = 0,
+    CombatDiag = nil,
     LastInventoryScan = 0,
     PatrolIndex = 1,
     LastPatrolSwitch = 0,
@@ -364,8 +379,8 @@ local AccountValuation = {
     HasSuperhuman = false,
     GodhumanReady = false,
     StyleMastery = {},
-    StyleTopRank = 0,       -- ранг самого продвинутого найденного стиля (V10.6)
-    StyleChainDone = false, -- цепочка стилей добита с учётом доступности Dragon Breath (V10.6)
+    StyleTopRank = 0,       -- ранг самого продвинутого найденного стиля (V10.6.3)
+    StyleChainDone = false, -- цепочка стилей добита с учётом доступности Dragon Breath (V10.6.3)
     CurStyleName = "--",
     CurStyleMastery = 0,
     GrossEUR = 0,
@@ -753,14 +768,14 @@ local function buildHUD(onSwitchClicked)
         "OllieHudV6", "OllieHudV7", "OllieHudV7_1", "OllieHudV7_2",
         "OllieHudV8", "OllieHudV8_1", "OllieHudV8_7", "OllieHudV8_8",
         "OllieHudV8_9", "OllieHudV8_9_1", "OllieHudV8_9_2", "OllieHudV8_9_3",
-        "OllieHudV8_9_4", "OllieHudV9_0", "OllieHudV10_0", "OllieHudV10_1", "OllieHudV10_2", "OllieHudV10_3", "OllieHudV10_4", "OllieHudV10_5", "OllieHudV10_6"
+        "OllieHudV8_9_4", "OllieHudV9_0", "OllieHudV10_0", "OllieHudV10_1", "OllieHudV10_2", "OllieHudV10_3", "OllieHudV10_4", "OllieHudV10_5", "OllieHudV10_6", "OllieHudV10_6_3"
     }) do
         local old = pGui:FindFirstChild(oldName)
         if old then old:Destroy() end
     end
 
     local screen = Instance.new("ScreenGui")
-    screen.Name = "OllieHudV10_6"
+    screen.Name = "OllieHudV10_6_3"
     screen.ResetOnSpawn = false
     screen.DisplayOrder = 999999
     screen.IgnoreGuiInset = true
@@ -779,7 +794,7 @@ local function buildHUD(onSwitchClicked)
     header.Size = UDim2.new(1, -12, 0, 22)
     header.Position = UDim2.new(0, 6, 0, 4)
     header.BackgroundTransparency = 1
-    header.Text = "OLLIE V10.6 [PROJEKT REAL FULL-AUTO]"
+    header.Text = "OLLIE V10.6.3 [PROJEKT REAL FULL-AUTO]"
     header.TextColor3 = Color3.fromRGB(0, 255, 136)
     header.Font = Enum.Font.SourceSansBold
     header.TextSize = 15
@@ -877,12 +892,12 @@ local function buildHUD(onSwitchClicked)
     BoardLines.StyleLine      = makeBoardRow(144, "Стиль: -- [0/400]", Color3.fromRGB(150, 220, 255), false)
 
     local lastToggle = 0
-    table.insert(Env.OllieV10_6_Connections, btnToggle.Activated:Connect(function()
+    table.insert(Env.OllieV10_6_3_Connections, btnToggle.Activated:Connect(function()
         if not isRunActive() or (tick() - lastToggle < 0.35) then return end
         lastToggle = tick()
-        Env.OllieV10_6_Enabled = not Env.OllieV10_6_Enabled
-        if onSwitchClicked then onSwitchClicked(Env.OllieV10_6_Enabled) end
-        if Env.OllieV10_6_Enabled then
+        Env.OllieV10_6_3_Enabled = not Env.OllieV10_6_3_Enabled
+        if onSwitchClicked then onSwitchClicked(Env.OllieV10_6_3_Enabled) end
+        if Env.OllieV10_6_3_Enabled then
             btnToggle.Text = "ФАРМ: ВКЛ"
             btnToggle.BackgroundColor3 = Color3.fromRGB(0, 175, 90)
             header.TextColor3 = Color3.fromRGB(0, 255, 136)
@@ -897,7 +912,7 @@ local function buildHUD(onSwitchClicked)
     end))
 
     local lastBoardToggle = 0
-    table.insert(Env.OllieV10_6_Connections, btnBoard.Activated:Connect(function()
+    table.insert(Env.OllieV10_6_3_Connections, btnBoard.Activated:Connect(function()
         if not isRunActive() or (tick() - lastBoardToggle < 0.25) then return end
         lastBoardToggle = tick()
         board.Visible = not board.Visible
@@ -914,7 +929,7 @@ local function buildHUD(onSwitchClicked)
     updateStatsBoardUI(true)
 end
 
-table.insert(Env.OllieV10_6_Connections, LocalPlayer.Idled:Connect(function()
+table.insert(Env.OllieV10_6_3_Connections, LocalPlayer.Idled:Connect(function()
     if not isRunActive() then return end
     pcall(function()
         VirtualUser:CaptureController()
@@ -1014,7 +1029,7 @@ local function getVisibleQuestObject()
     LastFullQuestScan = tick()
 
     for _, gui in ipairs(pGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV10_6" then
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV10_6_3" then
             for _, obj in ipairs(gui:GetDescendants()) do
                 if obj.Name == "Quest" and obj:IsA("GuiObject") and obj.Visible then
                     if isGuiChainVisible(obj, gui) then
@@ -1062,10 +1077,10 @@ local function isQuestTextDefinitelyStale(qData)
     return false
 end
 
--- Универсальная очистка диалогов (V10.5, правки V10.6): закрывает и окна с кнопками, и текстовые монологи без кнопок
+-- Универсальная очистка диалогов (V10.5, правки V10.6.3): закрывает и окна с кнопками, и текстовые монологи без кнопок
 -- (например, реплики Escaped Prisoner), которые раньше оставляли бота висеть в диалоге.
 local DialogueContainerNames = { Dialogue = true, Conversation = true, Subtitle = true, ChatBubble = true }
--- Только кнопки подтверждения. Option2 и Close в диалогах Blox Fruits - это отмена, их не нажимаем (V10.6)
+-- Только кнопки подтверждения. Option2 и Close в диалогах Blox Fruits - это отмена, их не нажимаем (V10.6.3)
 local DialogueButtonNames = { Option1 = true, Next = true, Accept = true, Confirm = true }
 local DialogueTries = {}
 local LastDialogueClear = 0
@@ -1103,7 +1118,7 @@ local function clearBlockingDialogue()
 
         local closedAny = false
         for _, gui in ipairs(pGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV10_6" then
+            if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "OllieHudV10_6_3" then
                 for _, obj in ipairs(gui:GetDescendants()) do
                     if DialogueContainerNames[obj.Name] and obj:IsA("GuiObject") and obj.Visible then
                         closedAny = true
@@ -1386,7 +1401,7 @@ local function stopTweenAndReleasePhysics(restoreCollide)
         end
     end
 end
-Env.OllieV10_6_Cleanup = function()
+Env.OllieV10_6_3_Cleanup = function()
     stopTweenAndReleasePhysics(true)
 end
 
@@ -1396,8 +1411,8 @@ buildHUD(function(enabled)
     end
 end)
 
-table.insert(Env.OllieV10_6_Connections, RunService.Stepped:Connect(function()
-    if not isRunActive() or not Env.OllieV10_6_Enabled or FSM.GroundedAtNPC or FSM.Completed then return end
+table.insert(Env.OllieV10_6_3_Connections, RunService.Stepped:Connect(function()
+    if not isRunActive() or not Env.OllieV10_6_3_Enabled or FSM.GroundedAtNPC or FSM.Completed then return end
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
@@ -1442,7 +1457,7 @@ local function smartMoveTo(targetCFrame)
                 stopTweenOnly()
                 ensureHoverBV(root)
                 pcall(function() comm:InvokeServer("requestEntrance", portalVec) end)
-                task.wait(1.0) -- сервер успевает телепортировать персонажа до нового Tween (V10.6)
+                task.wait(1.0) -- сервер успевает телепортировать персонажа до нового Tween (V10.6.3)
                 return
             end
         end
@@ -1467,7 +1482,7 @@ local function smartMoveTo(targetCFrame)
     if horizDist > 160 then
         local cruiseY = math.max(finalPos.Y + 35, Config.TravelClearanceY)
         if curPos.X > 50000 or math.abs(curPos.Z) > 31000 then
-            -- Подводный город и трюм Cursed Ship: низкий потолок, крейсерская высота не выше finalPos.Y + 15 (V10.6)
+            -- Подводный город и трюм Cursed Ship: низкий потолок, крейсерская высота не выше finalPos.Y + 15 (V10.6.3)
             cruiseY = finalPos.Y + 15
         end
         waypointPos = Vector3.new(finalPos.X, cruiseY, finalPos.Z)
@@ -1501,7 +1516,7 @@ local CachedRegHit = nil
 local CachedCFUpvalTable = nil
 local LastCFScan = 0
 
-table.insert(Env.OllieV10_6_Connections, LocalPlayer.CharacterAdded:Connect(function()
+table.insert(Env.OllieV10_6_3_Connections, LocalPlayer.CharacterAdded:Connect(function()
     stopTweenAndReleasePhysics(false)
     FSM.ActiveCombatMob = nil
     FSM.GroundedAtNPC = false
@@ -1572,7 +1587,7 @@ local function equipBestTool()
         return eq
     end
 
-    -- Идёт переход в Sea 2: Key в руках нужен для двери Ice Admiral, поток атаки его не снимает (V10.6)
+    -- Идёт переход в Sea 2: Key в руках нужен для двери Ice Admiral, поток атаки его не снимает (V10.6.3)
     if eq and eq.Name == "Key" and (tick() - FSM.Sea2TransitionTick) < 3.0 then
         return eq
     end
@@ -1718,7 +1733,7 @@ local function findWorldSpawnedFruit()
     return nil, nil
 end
 
--- Таймаут урона по мобу и Anti-Stuck (V10.6): моб, которому мы не наносим урон, игнорируется на Config.MobIgnoreSec секунд
+-- Таймаут урона по мобу и Anti-Stuck (V10.6.3): моб, которому мы не наносим урон, игнорируется на Config.MobIgnoreSec секунд
 local IgnoredMobs = {}          -- [моб] = tick(), до которого он игнорируется
 local LastMobDamageTick = 0     -- когда в последний раз здоровье текущего моба упало на MobDamageMinDrop
 local LastMobHealth = 0         -- базовое здоровье текущего моба для отсчёта урона
@@ -1849,6 +1864,23 @@ local function executeAttack(mob)
             ctrl:attack()
         end
     end)
+
+    -- Запасной удар (V10.6.3): включается пробой урона в главном цикле, когда HP моба не падает
+    if FSM.ClickFallback and (tick() - FSM.LastClickFallback) >= 0.12 then
+        FSM.LastClickFallback = tick()
+        task.spawn(function()
+            pcall(function()
+                local cam = Workspace.CurrentCamera
+                local vp = (cam and cam.ViewportSize) or Vector2.new(1280, 720)
+                local clickPos = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+                local camCF = (cam and cam.CFrame) or CFrame.new()
+                VirtualUser:CaptureController()
+                VirtualUser:Button1Down(clickPos, camCF)
+                task.wait(0.03)
+                VirtualUser:Button1Up(clickPos, camCF)
+            end)
+        end)
+    end
 end
 
 -- 100% АВТОМАТИЧЕСКОЕ ПРОХОЖДЕНИЕ КВЕСТА НА ВТОРОЕ МОРЕ (SEA 1 -> SEA 2 НА 700 LVL)
@@ -1969,11 +2001,35 @@ local function runAutoSea2Transition(myLvl)
     end
 end
 
+-- Диагностика боя (V10.6.3): строки [OLLIE][DIAG] в консоли (F9) показывают, что именно доступно в лаунчере
+FSM.CombatDiag = function(tag)
+    if not Config.CombatDiagnostics then return end
+    pcall(function()
+        local regAtk, regHit = getCombatRemotes()
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        local ctrl = getCombatFrameworkCtrl()
+        print(string.format(
+            "[OLLIE][DIAG] %s | RegisterAttack=%s RegisterHit=%s | CF controller=%s | getupvalues=%s | firesignal=%s | tool=%s | Buso=%s | ClickFallback=%s",
+            tostring(tag),
+            tostring(regAtk ~= nil), tostring(regHit ~= nil), tostring(ctrl ~= nil),
+            tostring(debug ~= nil and debug.getupvalues ~= nil), tostring(firesignal ~= nil),
+            tostring(tool and tool.Name or "нет"), tostring(char ~= nil and char:FindFirstChild("HasBuso") ~= nil),
+            tostring(FSM.ClickFallback)
+        ))
+    end)
+end
+
+task.spawn(function()
+    task.wait(6)
+    if isRunActive() then FSM.CombatDiag("старт") end
+end)
+
 -- Поток стелс-турбо атаки
 task.spawn(function()
     while isRunActive() do
         task.wait(Config.FastAttackInterval + (math.random(5, 22) / 1000))
-        if isRunActive() and Env.OllieV10_6_Enabled and not FSM.Completed and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
+        if isRunActive() and Env.OllieV10_6_3_Enabled and not FSM.Completed and not FSM.GroundedAtNPC and not FSM.IsHealingState and FSM.ActiveCombatMob then
             pcall(function()
                 local mh = FSM.ActiveCombatMob:FindFirstChildOfClass("Humanoid")
                 local mr = FSM.ActiveCombatMob:FindFirstChild("HumanoidRootPart")
@@ -2095,7 +2151,7 @@ end
 
 task.spawn(function()
     while isRunActive() and task.wait(4.0 + (math.random(0, 10) / 10)) do
-        if isRunActive() and Env.OllieV10_6_Enabled and not FSM.Completed then
+        if isRunActive() and Env.OllieV10_6_3_Enabled and not FSM.Completed then
             local comm = getCommF()
             if comm then
                 if Config.AutoStats then
@@ -2182,7 +2238,7 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- 10.5. WATCHDOG: ПРИНУДИТЕЛЬНЫЙ СБРОС ЗАВИСШЕГО СОСТОЯНИЯ (V10.6)
+-- 10.5. WATCHDOG: ПРИНУДИТЕЛЬНЫЙ СБРОС ЗАВИСШЕГО СОСТОЯНИЯ (V10.6.3)
 -- ============================================================================
 -- Прогрессом считается рост уровня, смена опыта или рост Beli (сдача квеста и убийства дают и то и другое).
 -- Время вне обычного фарма (отхил, подлёт к учителю, сниппер фруктов, переход в Sea 2, пауза, ожидание спавна)
@@ -2265,7 +2321,7 @@ local function watchdogCheck(myLvl)
 end
 
 -- ============================================================================
--- 11. ГЛАВНЫЙ ЦИКЛ УПРАВЛЕНИЯ V10.6 [PROJEKT REAL FULL-AUTO]
+-- 11. ГЛАВНЫЙ ЦИКЛ УПРАВЛЕНИЯ V10.6.3 [PROJEKT REAL FULL-AUTO]
 -- ============================================================================
 local LastSetSpawnIsland = ""
 
@@ -2302,7 +2358,7 @@ task.spawn(function()
 
         if skipTick then
             -- тик пропущен: идёт поиск пустого сервера
-        elseif not Env.OllieV10_6_Enabled then
+        elseif not Env.OllieV10_6_3_Enabled then
             stopTweenAndReleasePhysics(true)
             FSM.ActiveCombatMob = nil
         else
@@ -2387,7 +2443,7 @@ task.spawn(function()
                     print("[OLLIE] Sea 2: достигнут 1500 LVL. Sea 3 открывается вручную (King Red Head в Colosseum, Don Swan, Mr. Captain). Бот продолжает фарм до " .. tostring(Config.MaxLevel) .. " LVL.")
                     pcall(function()
                         StarterGui:SetCore("SendNotification", {
-                            Title = "OLLIE V10.6 [PROJEKT REAL]",
+                            Title = "OLLIE V10.6.3 [PROJEKT REAL]",
                             Text = "1500 LVL: Sea 3 открывается вручную. Фарм продолжается.",
                             Duration = 8
                         })
@@ -2398,7 +2454,7 @@ task.spawn(function()
                     -- Цель достигнута: полностью прекращаем перемещения и атаки (главный цикл, поток атаки и noclip
                     -- проверяют FSM.Completed), персонаж остаётся на месте
                     FSM.Completed = true
-                    Env.OllieV10_6_Enabled = false
+                    Env.OllieV10_6_3_Enabled = false
                     FSM.ActiveCombatMob = nil
                     FSM.StyleTrip = nil
                     stopTweenAndReleasePhysics(true)
@@ -2418,7 +2474,7 @@ task.spawn(function()
                         print("[OLLIE] " .. doneText)
                         pcall(function()
                             StarterGui:SetCore("SendNotification", {
-                                Title = "OLLIE V10.6 [PROJEKT REAL]",
+                                Title = "OLLIE V10.6.3 [PROJEKT REAL]",
                                 Text = doneText,
                                 Duration = 10
                             })
@@ -2570,6 +2626,24 @@ task.spawn(function()
                         local mobHum = mob:FindFirstChildOfClass("Humanoid")
                         local mobHp = mobHum and mobHum.Health or 0
                         local mobDist = (root.Position - mPos).Magnitude
+
+                        -- ПРОБА УРОНА (V10.6.3): HP падает хоть на единицу -> удары идут; не падает -> запасной удар кликом
+                        if FSM.DmgProbeMob ~= mob then
+                            FSM.DmgProbeMob = mob
+                            FSM.DmgProbeHp = mobHp
+                            FSM.DmgProbeTick = tick()
+                        elseif mobHp < FSM.DmgProbeHp then
+                            FSM.DmgProbeHp = mobHp
+                            FSM.DmgProbeTick = tick()
+                            FSM.ClickFallback = false
+                        elseif mobDist <= Config.MobDamageEngageDist and (tick() - FSM.DmgProbeTick) > Config.ClickFallbackAfterSec then
+                            if not FSM.ClickFallback or (tick() - FSM.LastDiagTick) > 60 then
+                                FSM.ClickFallback = true
+                                FSM.LastDiagTick = tick()
+                                if FSM.CombatDiag then FSM.CombatDiag("нет урона по мобу " .. tostring(mob.Name)) end
+                            end
+                        end
+                        if mobHp > FSM.DmgProbeHp then FSM.DmgProbeHp = mobHp end
                         if CurrentMobInstance ~= mob or mobDist > Config.MobDamageEngageDist then
                             CurrentMobInstance = mob
                             LastMobHealth = mobHp
