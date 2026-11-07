@@ -1,0 +1,1313 @@
+--!native
+--!optimize 2
+--[[
+    BLOX FRUITS COMMERCIAL KAITUN ENGINE (36H PIPELINE)
+    Runtime: Project Real Executor (Luau)
+    Architecture: Finite State Machine (FSM) + Safe Linear Tweening + CFrame Simulation Bring
+]]
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
+local Lighting = game:GetService("Lighting")
+local GuiService = game:GetService("GuiService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+local CommF_ = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_", 30)
+
+-- ============================================================================
+-- 1. КОНФИГУРАЦИЯ, РЫНОЧНЫЕ КОЭФФИЦИЕНТЫ FUNPAY И АДМИН-БАЗА
+-- ============================================================================
+local Config = {
+    TargetLevel = 1600,
+    TweenSpeed = 285,               -- 285 studs/sec: порог ниже триггера серверного отката (Rubberbanding)
+    HoverOffset = Vector3.new(0, 26, 0), -- Мертвая зона мобов по вертикали
+    BringRadius = 310,              -- Максимальный радиус удержания NetworkOwnership
+    AttackInterval = 0.115,         -- Оптимальный тайминг удара без перегрузки Remote-очереди
+    WatchdogTimeout = 210,          -- 3.5 минуты без прогресса EXP = полный сброс цикла
+    GachaCooldown = 7215,           -- 2 часа + 15 сек буфер
+    MinBeliForGacha = 450000,
+    MinFragmentsGoal = 6500,
+    LowPopTarget = 1,               -- Идеальное число игроков на сервере при поиске
+    FunPayFeePercent = 0.12,        -- 9% базовая комиссия FunPay на РБ + ~3% буфер вывода
+    EurToRubRate = 104.5            -- Расчетный курс для конвертации в €
+}
+
+local AdminList = {
+    ["rip_indra"] = true, ["mygame43"] = true, ["uzoth"] = true,
+    ["zioles"] = true, ["kittgaming"] = true, ["en_yu"] = true,
+    ["fer999"] = true, ["axiore"] = true, ["obito"] = true,
+    ["shafi"] = true, ["magicbus"] = true, ["jinn"] = true,
+    ["love"] = true, ["gamerrobot"] = true, ["redhead"] = true
+}
+
+localAdminGroupIds = {
+    [2830050] = true, -- Gamer Robot Inc
+    [4165692] = true, -- Blox Fruits Admins
+    [1200769] = true  -- Roblox Official Staff
+}
+
+local FruitValuation = {
+    ["Kitsune-Kitsune"] = {Tier = "Mythical", RubBonus = 950, PriorityEat = false},
+    ["Dragon-Dragon"]   = {Tier = "Mythical", RubBonus = 1150, PriorityEat = false},
+    ["Leopard-Leopard"] = {Tier = "Mythical", RubBonus = 520, PriorityEat = false},
+    ["Dough-Dough"]     = {Tier = "Mythical", RubBonus = 430, PriorityEat = false},
+    ["T-Rex-T-Rex"]     = {Tier = "Mythical", RubBonus = 360, PriorityEat = false},
+    ["Mammoth-Mammoth"] = {Tier = "Mythical", RubBonus = 240, PriorityEat = false},
+    ["Spirit-Spirit"]   = {Tier = "Mythical", RubBonus = 220, PriorityEat = false},
+    ["Venom-Venom"]     = {Tier = "Mythical", RubBonus = 200, PriorityEat = false},
+    ["Shadow-Shadow"]   = {Tier = "Mythical", RubBonus = 170, PriorityEat = false},
+    ["Control-Control"] = {Tier = "Mythical", RubBonus = 180, PriorityEat = false},
+    ["Gravity-Gravity"] = {Tier = "Mythical", RubBonus = 80,  PriorityEat = true}, -- Годится для билета к Don Swan (>1M)
+    ["Pain-Pain"]       = {Tier = "Legendary", RubBonus = 60, PriorityEat = true},
+    ["Buddha-Buddha"]   = {Tier = "Legendary", RubBonus = 390, PriorityEat = true}, -- #1 для фарма
+    ["Portal-Portal"]   = {Tier = "Legendary", RubBonus = 340, PriorityEat = false},
+    ["Blizzard-Blizzard"]= {Tier = "Legendary", RubBonus = 190, PriorityEat = false},
+    ["Rumble-Rumble"]   = {Tier = "Legendary", RubBonus = 180, PriorityEat = false},
+    ["Magma-Magma"]     = {Tier = "Rare", RubBonus = 50, PriorityEat = true},
+    ["Light-Light"]     = {Tier = "Rare", RubBonus = 45, PriorityEat = true},
+    ["Ice-Ice"]         = {Tier = "Uncommon", RubBonus = 25, PriorityEat = true},
+    ["Flame-Flame"]     = {Tier = "Uncommon", RubBonus = 20, PriorityEat = true}
+}
+
+local FightingStylesOrder = {
+    {
+        Name = "Black Leg",
+        BuyArg = "BuyBlackLeg",
+        CostBeli = 150000,
+        CostFrag = 0,
+        TargetMastery = 400
+    },
+    {
+        Name = "Electro",
+        BuyArg = "BuyElectro",
+        CostBeli = 500000,
+        CostFrag = 0,
+        TargetMastery = 400
+    },
+    {
+        Name = "Fishman Karate",
+        BuyArg = "BuyFishmanKarate",
+        CostBeli = 750000,
+        CostFrag = 0,
+        TargetMastery = 400
+    },
+    {
+        Name = "Dragon Breath",
+        BuyArg = {"BlackbeardReward", "DragonClaw", "2"},
+        CostBeli = 0,
+        CostFrag = 1500,
+        MinSea = 2,
+        TargetMastery = 400
+    },
+    {
+        Name = "Superhuman",
+        BuyArg = "BuySuperhuman",
+        CostBeli = 3000000,
+        CostFrag = 0,
+        MinSea = 2,
+        TargetMastery = 400
+    }
+}
+
+-- ============================================================================
+-- 2. СОСТОЯНИЕ СЕССИИ И ПАМЯТЬ СТИЛЕЙ
+-- ============================================================================
+local State = {
+    CurrentSea = (game.PlaceId == 2753915549 and 1) or (game.PlaceId == 4442272183 and 2) or 3,
+    Task = "Инициализация",
+    StartTime = os.time(),
+    LastExpValue = 0,
+    LastExpTimestamp = os.time(),
+    LastGachaAttempt = 0,
+    CurrentTween = nil,
+    StyleMasteryCache = {
+        ["Black Leg"] = 0,
+        ["Electro"] = 0,
+        ["Fishman Karate"] = 0,
+        ["Dragon Breath"] = 0,
+        ["Superhuman"] = 0
+    },
+    OwnedItems = {
+        ["Saber"] = false,
+        ["Rengoku"] = false,
+        ["Midnight Blade"] = false,
+        ["Warrior Helmet"] = false,
+        ["Swan Glasses"] = false
+    },
+    StoredFruits = {},
+    ServerHopping = false
+}
+
+-- ============================================================================
+-- 3. АНТИ-БАН, ЗАЩИТА ПАКЕТОВ (PROJECT REAL) И ОПТИМИЗАЦИЯ 36 ЧАСОВ
+-- ============================================================================
+local function InitializeSecurityAndBypass()
+    -- 1. Автовыбор команды при входе (Pirates)
+    task.spawn(function()
+        while LocalPlayer.Team == nil do
+            pcall(function()
+                CommF_:InvokeServer("SetTeam", "Pirates")
+            end)
+            task.wait(1)
+        end
+    end)
+
+    -- 2. Отключение рендера лишних частиц и 3D-мусора для исключения утечки памяти за 36ч
+    pcall(function()
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        for _, v in ipairs(Workspace:GetDescendants()) do
+            if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+                v.Enabled = false
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                v.Transparency = 1
+            end
+        end
+    end)
+
+    -- 3. Перехват клиентских телеметрических пакетов античита через hookmetamethod
+    if hookmetamethod and getnamecallmethod and checkcaller then
+        local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
+            if not checkcaller() then
+                if method == "FireServer" or method == "InvokeServer" then
+                    local remoteName = tostring(self.Name):lower()
+                    if remoteName:find("teleport") or remoteName:find("security") or remoteName:find("ban") or remoteName:find("crash") or remoteName:find("log") then
+                        return nil
+                    end
+                    if self.Name == "MainEvent" and type(args[1]) == "string" then
+                        local flag = args[1]:lower()
+                        if flag:find("cheat") or flag:find("fly") or flag:find("speed") or flag:find("noclip") then
+                            return nil
+                        end
+                    end
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+    end
+
+    -- 4. Анти-AFK (защита от 20-минутного кика Idle)
+    LocalPlayer.Idled:Connect(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0))
+    end)
+
+    -- 5. Расширение радиуса симуляции физики (для плавной стяжки мобов AoE Bring)
+    RunService.Stepped:Connect(function()
+        pcall(function()
+            if sethiddenproperty then
+                sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+                sethiddenproperty(LocalPlayer, "MaxSimulationRadius", math.huge)
+            end
+        end)
+    end)
+
+    -- 6. Непрерывный NoClip + Anti-Fall (Float платформа под ногами)
+    RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local bv = hrp:FindFirstChild("KaitunAntiGravity")
+                if not bv then
+                    bv = Instance.new("BodyVelocity")
+                    bv.Name = "KaitunAntiGravity"
+                    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+                    bv.Velocity = Vector3.zero
+                    bv.Parent = hrp
+                else
+                    bv.Velocity = Vector3.zero
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================================
+-- 4. SERP / LOW-POP (1 ИГРОК) SERVER HOP & ADMIN DETECTOR
+-- ============================================================================
+local function HopToOnePlayerServer(reason)
+    if State.ServerHopping then return end
+    State.ServerHopping = true
+    State.Task = "Смена сервера (" .. tostring(reason) .. ")"
+
+    local placeId = game.PlaceId
+    local cursor = ""
+    local foundServer = nil
+
+    for page = 1, 8 do
+        local url = string.format(
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s",
+            placeId,
+            cursor ~= "" and ("&cursor=" .. cursor) or ""
+        )
+
+        local ok, response = pcall(function()
+            if request then
+                local r = request({Url = url, Method = "GET"})
+                return HttpService:JSONDecode(r.Body)
+            else
+                return HttpService:JSONDecode(game:HttpGet(url))
+            end
+        end)
+
+        if ok and response and response.data then
+            for _, srv in ipairs(response.data) do
+                if type(srv) == "table" and srv.id ~= game.JobId and srv.playing and srv.maxPlayers then
+                    if srv.playing >= 1 and srv.playing <= 2 and srv.playing < srv.maxPlayers then
+                        foundServer = srv.id
+                        break
+                    end
+                end
+            end
+            if foundServer then break end
+            if response.nextPageCursor then
+                cursor = response.nextPageCursor
+            else
+                break
+            end
+        end
+        task.wait(0.35)
+    end
+
+    pcall(function()
+        if foundServer then
+            TeleportService:TeleportToPlaceInstance(placeId, foundServer, LocalPlayer)
+        else
+            TeleportService:Teleport(placeId, LocalPlayer)
+        end
+    end)
+    task.wait(8)
+    State.ServerHopping = false
+end
+
+local function CheckPlayerIsAdmin(plr)
+    if plr == LocalPlayer then return false end
+    local lowerName = plr.Name:lower()
+    local lowerDisplay = plr.DisplayName:lower()
+    if AdminList[lowerName] or AdminList[lowerDisplay] then
+        return true
+    end
+    for groupId, _ in pairs(localAdminGroupIds) do
+        local ok, inGroup = pcall(function()
+            return plr:IsInGroup(groupId)
+        end)
+        if ok and inGroup then
+            return true
+        end
+    end
+    -- Проверка наличия админских бейджей/предметов в инвентаре
+    local bp = plr:FindFirstChild("Backpack")
+    if bp and (bp:FindFirstChild("Triple Dark Blade") or bp:FindFirstChild("Meme Beast")) then
+        return true
+    end
+    return false
+end
+
+local function StartAdminAndDisconnectWatch()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if CheckPlayerIsAdmin(plr) then
+            HopToOnePlayerServer("Обнаружен Админ: " .. plr.Name)
+            return
+        end
+    end
+
+    Players.PlayerAdded:Connect(function(plr)
+        if CheckPlayerIsAdmin(plr) then
+            HopToOnePlayerServer("Зашел Админ: " .. plr.Name)
+        end
+    end)
+
+    -- Авто-реконнект при вылете или краше сессии
+    GuiService.ErrorMessageChanged:Connect(function()
+        task.wait(2)
+        HopToOnePlayerServer("Восстановление после дисконнекта")
+    end)
+end
+
+-- ============================================================================
+-- 5. БЕЗОПАСНОЕ ПЕРЕМЕЩЕНИЕ (SAFE TWEEN ENGINE) И ZERO-STUCK ПОЗИЦИОНИРОВАНИЕ
+-- ============================================================================
+local function GetCharacterRoot()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hrp and hum and hum.Health > 0 then
+        return hrp, hum
+    end
+    return nil, nil
+end
+
+local function SafeTweenTo(targetCFrame)
+    local hrp, hum = GetCharacterRoot()
+    if not hrp or not hum then return false end
+
+    local distance = (hrp.Position - targetCFrame.Position).Magnitude
+    if distance <= 12 then
+        hrp.CFrame = targetCFrame
+        return true
+    end
+
+    -- Мгновенный сброс сидения (предотвращает залипание на стульях/лодках)
+    if hum.Sit then
+        hum.Sit = false
+        hum.Jump = true
+    end
+
+    -- Пошаговая линейная интерполяция на базе RunService.Heartbeat (без рывков TweenService)
+    local startTime = os.clock()
+    local duration = distance / Config.TweenSpeed
+    local startPos = hrp.Position
+    local targetPos = targetCFrame.Position
+    local rotation = targetCFrame - targetCFrame.Position
+
+    while (hrp.Position - targetPos).Magnitude > 10 do
+        if not LocalPlayer.Character or not hrp.Parent or hum.Health <= 0 then
+            return false
+        end
+        local elapsed = os.clock() - startTime
+        local alpha = math.clamp(elapsed / duration, 0, 1)
+        local nextPos = startPos:Lerp(targetPos, alpha)
+        hrp.CFrame = CFrame.new(nextPos) * rotation
+        if alpha >= 1 then break end
+        RunService.Heartbeat:Wait()
+    end
+
+    if hrp and hrp.Parent then
+        hrp.CFrame = targetCFrame
+    end
+    return true
+end
+
+-- ============================================================================
+-- 6. AOE BRING (СТЯЖКА 4-6 МОБОВ) + NON-BLOCKING COMBAT ENGINE
+-- ============================================================================
+local function BringMobsToAnchor(mobName, anchorPos)
+    local enemiesFolder = Workspace:FindFirstChild("Enemies")
+    if not enemiesFolder then return end
+
+    local count = 0
+    for _, mob in ipairs(enemiesFolder:GetChildren()) do
+        if count >= 6 then break end
+        if mob.Name == mobName then
+            local mHrp = mob:FindFirstChild("HumanoidRootPart")
+            local mHum = mob:FindFirstChildOfClass("Humanoid")
+            if mHrp and mHum and mHum.Health > 0 then
+                if (mHrp.Position - anchorPos).Magnitude <= Config.BringRadius then
+                    pcall(function()
+                        mHrp.CanCollide = false
+                        mHrp.Size = Vector3.new(60, 60, 60)
+                        mHrp.Transparency = 1
+                        mHrp.CFrame = CFrame.new(anchorPos)
+                        mHum.WalkSpeed = 0
+                        mHum.JumpPower = 0
+                        if mHum:FindFirstChild("Animator") then
+                            mHum.Animator:Destroy()
+                        end
+                        mHum:ChangeState(11) -- Блокировка ответных атак моба
+                    end)
+                    count = count + 1
+                end
+            end
+        end
+    end
+end
+
+local function EnsureBusoHaki()
+    local char = LocalPlayer.Character
+    if char and not char:FindFirstChild("HasBuso") then
+        pcall(function()
+            CommF_:InvokeServer("Buso")
+        end)
+    end
+end
+
+local function DismissAllModalDialogs()
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if not pg then return end
+        local main = pg:FindFirstChild("Main")
+        if main then
+            local dlg = main:FindFirstChild("Dialogue")
+            if dlg and dlg.Visible then
+                dlg.Visible = false
+            end
+        end
+        local notifications = pg:FindFirstChild("Notifications")
+        if notifications then
+            for _, child in ipairs(notifications:GetChildren()) do
+                if child:IsA("TextLabel") or child:IsA("Frame") then
+                    child.Visible = false
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================================
+-- 7. ОПРЕДЕЛЕНИЕ И ПРОКАЧКА БОЕВЫХ СТИЛЕЙ (GODHUMAN READY PIPELINE)
+-- ============================================================================
+local function RefreshInventoryAndMastery()
+    pcall(function()
+        local invData = CommF_:InvokeServer("getInventory")
+        if type(invData) == "table" then
+            local fruits = {}
+            for _, item in ipairs(invData) do
+                if type(item) == "table" then
+                    if item.Type == "Sword" or item.Type == "Wear" then
+                        if State.OwnedItems[item.Name] ~= nil then
+                            State.OwnedItems[item.Name] = true
+                        end
+                    elseif item.Type == "Blox Fruit" then
+                        table.insert(fruits, item.Name)
+                    end
+                end
+            end
+            State.StoredFruits = fruits
+        end
+    end)
+
+    -- Считывание текущего Mastery на экипированном боевом стиле
+    local char = LocalPlayer.Character
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    for styleName, _ in pairs(State.StyleMasteryCache) do
+        local tool = (char and char:FindFirstChild(styleName)) or (bp and bp:FindFirstChild(styleName))
+        if tool and tool:FindFirstChild("Level") then
+            State.StyleMasteryCache[styleName] = tool.Level.Value
+        end
+    end
+end
+
+local function SelectAndEquipOptimalWeapon()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if not char or not hum or not bp then return end
+
+    local beli = LocalPlayer.Data.Beli.Value
+    local frags = LocalPlayer.Data.Fragments.Value
+
+    -- Проходим по списку 5 стилей для Godhuman Ready
+    for _, style in ipairs(FightingStylesOrder) do
+        local currentMastery = State.StyleMasteryCache[style.Name] or 0
+        local seaAllowed = (not style.MinSea) or (State.CurrentSea >= style.MinSea)
+
+        if currentMastery < style.TargetMastery and seaAllowed then
+            local tool = char:FindFirstChild(style.Name) or bp:FindFirstChild(style.Name)
+            if not tool then
+                if beli >= style.CostBeli and frags >= style.CostFrag then
+                    pcall(function()
+                        if type(style.BuyArg) == "table" then
+                            CommF_:InvokeServer(unpack(style.BuyArg))
+                        else
+                            CommF_:InvokeServer(style.BuyArg)
+                        end
+                    end)
+                    task.wait(0.3)
+                    tool = char:FindFirstChild(style.Name) or bp:FindFirstChild(style.Name)
+                end
+            end
+
+            if tool then
+                if tool:FindFirstChild("Level") then
+                    State.StyleMasteryCache[style.Name] = tool.Level.Value
+                end
+                if State.StyleMasteryCache[style.Name] < style.TargetMastery then
+                    if tool.Parent == bp then
+                        hum:EquipTool(tool)
+                    end
+                    return
+                end
+            end
+        end
+    end
+
+    -- Fallback: экипировка любого доступного Melee-инструмента
+    for _, tool in ipairs(bp:GetChildren()) do
+        if tool:IsA("Tool") and tool.ToolTip == "Melee" then
+            hum:EquipTool(tool)
+            return
+        end
+    end
+end
+
+local function AutoAllocateStats()
+    local points = LocalPlayer.Data.Points.Value
+    if points <= 0 then return end
+    pcall(function()
+        local meleeLvl = LocalPlayer.Data.Stats.Melee.Level.Value
+        local defLvl = LocalPlayer.Data.Stats.Defense.Level.Value
+        if meleeLvl < 2550 then
+            CommF_:InvokeServer("AddPoint", "Melee", math.min(points, 2550 - meleeLvl))
+        elseif defLvl < 2550 then
+            CommF_:InvokeServer("AddPoint", "Defense", math.min(points, 2550 - defLvl))
+        else
+            CommF_:InvokeServer("AddPoint", "Sword", points)
+        end
+    end)
+end
+
+local LastAttackTick = 0
+local function ExecuteFastAttack()
+    if os.clock() - LastAttackTick < Config.AttackInterval then return end
+    LastAttackTick = os.clock()
+
+    EnsureBusoHaki()
+    SelectAndEquipOptimalWeapon()
+
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button1Down(Vector2.new(1280, 672))
+
+        -- Прямая отправка боевого пакета RegisterAttack/RegisterHit (Net-фреймворк Blox Fruits)
+        local netModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Net")
+        if netModule then
+            local regAttack = netModule:FindFirstChild("RE/RegisterAttack")
+            local regHit = netModule:FindFirstChild("RE/RegisterHit")
+            if regAttack and regHit then
+                regAttack:FireServer(0)
+                local enemies = Workspace:FindFirstChild("Enemies")
+                if enemies then
+                    local hitTargets = {}
+                    local primaryPart = nil
+                    for _, mob in ipairs(enemies:GetChildren()) do
+                        local mHrp = mob:FindFirstChild("HumanoidRootPart")
+                        local mHum = mob:FindFirstChildOfClass("Humanoid")
+                        if mHrp and mHum and mHum.Health > 0 and (mHrp.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude <= 65 then
+                            if not primaryPart then primaryPart = mHrp end
+                            table.insert(hitTargets, {mob, mHrp})
+                        end
+                    end
+                    if primaryPart then
+                        regHit:FireServer(primaryPart, hitTargets)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================================
+-- 8. СБОР ФРУКТОВ, ГАЧА COUSIN, AUTO-STORE И БУДДА-ТРАНСФОРМАЦИЯ
+-- ============================================================================
+local function ProcessBackpackFruits()
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    local char = LocalPlayer.Character
+    if not bp or not char then return end
+
+    local currentFruit = LocalPlayer.Data.DevilFruit.Value
+    local containers = {bp, char}
+
+    for _, container in ipairs(containers) do
+        for _, item in ipairs(container:GetChildren()) do
+            if item:IsA("Tool") and (item.Name:find("Fruit") or item:GetAttribute("OriginalName")) then
+                local fruitId = item:GetAttribute("OriginalName") or item.Name:gsub(" Fruit", "") .. "-" .. item.Name:gsub(" Fruit", "")
+
+                -- Если у нас нет Buddha, а выпала Buddha или хороший Логия на старте — съедаем для ускорения прокачки в 3 раза
+                local shouldEat = false
+                if currentFruit ~= "Buddha-Buddha" then
+                    if fruitId == "Buddha-Buddha" then
+                        shouldEat = true
+                    elseif State.CurrentSea == 1 and currentFruit == "" and FruitValuation[fruitId] and FruitValuation[fruitId].PriorityEat then
+                        shouldEat = true
+                    end
+                end
+
+                -- Сначала всегда пробуем сохранить ценный фрукт в инвентарь
+                local storedOk = false
+                pcall(function()
+                    storedOk = CommF_:InvokeServer("StoreFruit", fruitId, item)
+                end)
+
+                if not storedOk and shouldEat then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        hum:EquipTool(item)
+                        task.wait(0.2)
+                        local eatRemote = item:FindFirstChild("EatRemote", true)
+                        if eatRemote then
+                            eatRemote:InvokeServer("Eat")
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function RunFruitGachaAndSniper()
+    -- 1. Ролл фрукта у Blox Fruit Gacha (Cousin) каждые 2 часа
+    if os.time() - State.LastGachaAttempt >= Config.GachaCooldown then
+        if LocalPlayer.Data.Beli.Value >= Config.MinBeliForGacha then
+            State.LastGachaAttempt = os.time()
+            pcall(function()
+                CommF_:InvokeServer("Cousin", "Buy")
+            end)
+            task.wait(0.5)
+            ProcessBackpackFruits()
+            RefreshInventoryAndMastery()
+        end
+    end
+
+    -- 2. Fruit Sniper — перехват упавших на карту фруктов
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Tool") and (obj.Name:find("Fruit") or obj:FindFirstChild("Handle")) then
+            local handle = obj:FindFirstChild("Handle")
+            local hrp = GetCharacterRoot()
+            if handle and hrp then
+                State.Task = "Перехват фрукта: " .. obj.Name
+                SafeTweenTo(handle.CFrame)
+                task.wait(0.3)
+                ProcessBackpackFruits()
+                RefreshInventoryAndMastery()
+            end
+        end
+    end
+end
+
+-- ============================================================================
+-- 9. ЭКСКЛЮЗИВНЫЕ КВЕСТЫ: SABER V2, RENGOKU, ПЕРЕХОД SEA 1 -> SEA 2 -> SEA 3
+-- ============================================================================
+local function FindBossModel(bossName)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if enemies then
+        local m = enemies:FindFirstChild(bossName)
+        if m and m:FindFirstChild("Humanoid") and m.Humanoid.Health > 0 then
+            return m
+        end
+    end
+    local rs = ReplicatedStorage:FindFirstChild(bossName)
+    if rs and rs:FindFirstChild("Humanoid") and rs.Humanoid.Health > 0 then
+        return rs
+    end
+    return nil
+end
+
+local function KillSpecificTarget(targetModel)
+    if not targetModel then return false end
+    local tHrp = targetModel:FindFirstChild("HumanoidRootPart")
+    local tHum = targetModel:FindFirstChildOfClass("Humanoid")
+    if not tHrp or not tHum then return false end
+
+    while targetModel.Parent and tHum.Health > 0 do
+        if State.ServerHopping then return false end
+        SafeTweenTo(tHrp.CFrame * CFrame.new(0, 24, 0))
+        ExecuteFastAttack()
+        RunService.Heartbeat:Wait()
+    end
+    return true
+end
+
+local function ExecuteSaberQuest()
+    if State.OwnedItems["Saber"] or LocalPlayer.Data.Level.Value < 200 or State.CurrentSea ~= 1 then
+        return false
+    end
+
+    local saberExpert = FindBossModel("Saber Expert")
+    if saberExpert then
+        State.Task = "Убийство Saber Expert (Получение Saber)"
+        KillSpecificTarget(saberExpert)
+        RefreshInventoryAndMastery()
+        return true
+    end
+
+    -- Прогресс пазла Джунглей через серверный триггер QuestProgress
+    pcall(function()
+        local prog = CommF_:InvokeServer("ProQuestProgress")
+        if type(prog) == "table" then
+            if not prog.UsedTorch then
+                State.Task = "Квест Saber: Активация плит Джунглей"
+                local map = Workspace:FindFirstChild("Map")
+                local jungle = map and map:FindFirstChild("Jungle")
+                if jungle and jungle:FindFirstChild("QuestPlates") then
+                    for _, plate in ipairs(jungle.QuestPlates:GetChildren()) do
+                        if plate:FindFirstChild("Button") then
+                            SafeTweenTo(plate.Button.CFrame)
+                            task.wait(0.35)
+                        end
+                    end
+                end
+                CommF_:InvokeServer("ProQuestProgress", "GetTorch")
+                CommF_:InvokeServer("ProQuestProgress", "DestroyTorch")
+            elseif not prog.UsedCup then
+                State.Task = "Квест Saber: Чаша и Больной человек"
+                CommF_:InvokeServer("ProQuestProgress", "GetCup")
+                CommF_:InvokeServer("ProQuestProgress", "FillCup")
+                CommF_:InvokeServer("ProQuestProgress", "SickMan")
+            elseif not prog.KilledMob then
+                State.Task = "Квест Saber: Разговор с Rich Man и убийство Mob Leader"
+                CommF_:InvokeServer("ProQuestProgress", "RichMan")
+                local mobLeader = FindBossModel("Mob Leader")
+                if mobLeader then
+                    KillSpecificTarget(mobLeader)
+                else
+                    SafeTweenTo(CFrame.new(-2848, 7, 5342))
+                end
+                CommF_:InvokeServer("ProQuestProgress", "RichMan")
+            elseif not prog.UsedRelic then
+                State.Task = "Квест Saber: Открытие двери Реликвией"
+                CommF_:InvokeServer("ProQuestProgress", "PlaceRelic")
+            end
+        end
+    end)
+    return false
+end
+
+local function ExecuteSea1ToSea2Transition()
+    if LocalPlayer.Data.Level.Value < 700 or State.CurrentSea ~= 1 then
+        return false
+    end
+    State.Task = "Переход в Sea 2 (Dressrosa)"
+    pcall(function()
+        local prog = CommF_:InvokeServer("DressrosaQuestProgress")
+        if type(prog) == "table" then
+            if not prog.UsedKey then
+                CommF_:InvokeServer("DressrosaQuestProgress", "Detective")
+                CommF_:InvokeServer("DressrosaQuestProgress", "UseKey")
+            end
+            if not prog.KilledIceBoss then
+                local iceAdmiral = FindBossModel("Ice Admiral")
+                if iceAdmiral then
+                    KillSpecificTarget(iceAdmiral)
+                else
+                    SafeTweenTo(CFrame.new(1345, 37, -1325))
+                end
+            else
+                CommF_:InvokeServer("TravelDressrosa")
+            end
+        else
+            CommF_:InvokeServer("TravelDressrosa")
+        end
+    end)
+    return true
+end
+
+local function CheckAndUnlockRengoku()
+    if State.CurrentSea ~= 2 or State.OwnedItems["Rengoku"] then return end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    local char = LocalPlayer.Character
+    local hiddenKey = (bp and bp:FindFirstChild("Hidden Key")) or (char and char:FindFirstChild("Hidden Key"))
+    if hiddenKey then
+        State.Task = "Открытие тайника с мечом Rengoku"
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hiddenKey.Parent == bp then
+            hum:EquipTool(hiddenKey)
+        end
+        SafeTweenTo(CFrame.new(6571, 299, -6967))
+        task.wait(1)
+        RefreshInventoryAndMastery()
+    end
+end
+
+local function ExecuteSea2ToSea3Transition()
+    if LocalPlayer.Data.Level.Value < 1500 or State.CurrentSea ~= 2 then
+        return false
+    end
+    State.Task = "Прогресс перехода в Sea 3 (Zou)"
+    pcall(function()
+        -- 1. Квест Бартоломео (Колизей)
+        local bartoProg = CommF_:InvokeServer("BartiloQuestProgress")
+        if type(bartoProg) == "table" and not bartoProg.DidPlates then
+            CommF_:InvokeServer("BartiloQuestProgress", "Bartilo")
+            local jeremy = FindBossModel("Jeremy")
+            if jeremy then
+                KillSpecificTarget(jeremy)
+            end
+            -- Авто-ввод кодов Колизея
+            local map = Workspace:FindFirstChild("Map")
+            if map and map:FindFirstChild("Dressrosa") then
+                CommF_:InvokeServer("BartiloQuestProgress", "Plates")
+            end
+        end
+
+        -- 2. Передача фрукта >1M Beli Тревору для открытия комнаты Don Swan
+        CommF_:InvokeServer("TalkTrevor", "1")
+        CommF_:InvokeServer("TalkTrevor", "2")
+        CommF_:InvokeServer("TalkTrevor", "3")
+
+        -- 3. Убийство Don Swan и Rip_Indra (Zou Quest)
+        local swan = FindBossModel("Don Swan")
+        if swan then
+            State.Task = "Убийство Don Swan"
+            KillSpecificTarget(swan)
+        end
+
+        CommF_:InvokeServer("ZQuestProgress", "Begin")
+        local indra = FindBossModel("rip_indra")
+        if indra then
+            State.Task = "Финальный бой с rip_indra (Переход в Sea 3)"
+            KillSpecificTarget(indra)
+        end
+        CommF_:InvokeServer("TravelZou")
+    end)
+    return true
+end
+
+-- ============================================================================
+-- 10. ФАРМ ФРАГМЕНТОВ (АВТО-РЕЙД FLAME / SEA BEASTS)
+-- ============================================================================
+local function RunAutoRaidForFragments()
+    if State.CurrentSea < 2 then return false end
+    if LocalPlayer.Data.Level.Value < 1100 then return false end
+    if LocalPlayer.Data.Fragments.Value >= Config.MinFragmentsGoal then return false end
+
+    -- Проверка: находимся ли мы уже на острове рейда
+    local raidTimer = LocalPlayer.PlayerGui:FindFirstChild("Main")
+        and LocalPlayer.PlayerGui.Main:FindFirstChild("Timer")
+
+    if raidTimer and raidTimer.Visible then
+        State.Task = "Зачистка острова Рейда (Фарм Fragments)"
+        -- Поиск активных мобов рейда и перелет между островами 1-5
+        local enemies = Workspace:FindFirstChild("Enemies")
+        if enemies then
+            for _, mob in ipairs(enemies:GetChildren()) do
+                local mHrp = mob:FindFirstChild("HumanoidRootPart")
+                local mHum = mob:FindFirstChildOfClass("Humanoid")
+                if mHrp and mHum and mHum.Health > 0 then
+                    SafeTweenTo(mHrp.CFrame * CFrame.new(0, 26, 0))
+                    BringMobsToAnchor(mob.Name, mHrp.Position)
+                    ExecuteFastAttack()
+                    return true
+                end
+            end
+        end
+        -- Перелет к следующему острову рейда
+        local locations = Workspace:FindFirstChild("_WorldOrigin") and Workspace._WorldOrigin:FindFirstChild("Locations")
+        if locations then
+            for i = 5, 1, -1 do
+                local isl = locations:FindFirstChild("Island " .. tostring(i))
+                if isl then
+                    SafeTweenTo(isl.CFrame * CFrame.new(0, 60, 0))
+                    break
+                end
+            end
+        end
+        return true
+    else
+        -- Покупка микрочипа Flame за 100k Beli и запуск рейда в Замке/Лаборатории
+        if LocalPlayer.Data.Beli.Value >= 1200000 then
+            State.Task = "Покупка чипа Flame Raid для фарма Фрагментов"
+            pcall(function()
+                CommF_:InvokeServer("RaidsNpc", "Select", "Flame")
+            end)
+            if State.CurrentSea == 2 then
+                SafeTweenTo(CFrame.new(-6438, 250, -4501))
+                pcall(function()
+                    fireclickdetector(Workspace.Map.CircleIsland.RaidSummon2.Button.Main.ClickDetector)
+                end)
+            elseif State.CurrentSea == 3 then
+                SafeTweenTo(CFrame.new(-5017, 314, -2823))
+                pcall(function()
+                    fireclickdetector(Workspace.Map["Boat Castle"].RaidSummon2.Button.Main.ClickDetector)
+                end)
+            end
+            task.wait(2)
+            return true
+        end
+    end
+    return false
+end
+
+-- ============================================================================
+-- 11. ТАБЛИЦА КВЕСТОВ ПРОКАЧКИ (1 -> 1600+ LVL, SEA 1 / SEA 2 / SEA 3)
+-- ============================================================================
+local QuestDatabase = {
+    -- SEA 1
+    {Sea = 1, Min = 1,   Max = 9,   Quest = "BanditQuest1",      Index = 1, Mob = "Bandit",               Pos = CFrame.new(1059, 16, 1549)},
+    {Sea = 1, Min = 10,  Max = 14,  Quest = "JungleQuest",       Index = 1, Mob = "Monkey",               Pos = CFrame.new(-1598, 36, 153)},
+    {Sea = 1, Min = 15,  Max = 29,  Quest = "JungleQuest",       Index = 2, Mob = "Gorilla",              Pos = CFrame.new(-1128, 40, -451)},
+    {Sea = 1, Min = 30,  Max = 39,  Quest = "BuggyQuest1",       Index = 1, Mob = "Pirate",               Pos = CFrame.new(-1140, 4, 3828)},
+    {Sea = 1, Min = 40,  Max = 59,  Quest = "BuggyQuest1",       Index = 2, Mob = "Brute",                Pos = CFrame.new(-1145, 15, 4322)},
+    {Sea = 1, Min = 60,  Max = 74,  Quest = "DesertQuest",       Index = 1, Mob = "Desert Bandit",        Pos = CFrame.new(924, 6, 4481)},
+    {Sea = 1, Min = 75,  Max = 89,  Quest = "DesertQuest",       Index = 2, Mob = "Desert Officer",       Pos = CFrame.new(1608, 9, 4371)},
+    {Sea = 1, Min = 90,  Max = 99,  Quest = "SnowQuest",         Index = 1, Mob = "Snow Bandit",          Pos = CFrame.new(1354, 87, -1393)},
+    {Sea = 1, Min = 100, Max = 119, Quest = "SnowQuest",         Index = 2, Mob = "Snowman",              Pos = CFrame.new(1201, 144, -1550)},
+    {Sea = 1, Min = 120, Max = 149, Quest = "MarineQuest2",      Index = 1, Mob = "Chief Petty Officer",  Pos = CFrame.new(-4881, 22, 4273)},
+    {Sea = 1, Min = 150, Max = 174, Quest = "SkyQuest",          Index = 1, Mob = "Sky Bandit",           Pos = CFrame.new(-4953, 295, -2899)},
+    {Sea = 1, Min = 175, Max = 189, Quest = "SkyQuest",          Index = 2, Mob = "Dark Master",          Pos = CFrame.new(-5259, 391, -2229)},
+    {Sea = 1, Min = 190, Max = 209, Quest = "PrisonerQuest",     Index = 1, Mob = "Prisoner",             Pos = CFrame.new(5098, 0, 474)},
+    {Sea = 1, Min = 210, Max = 249, Quest = "PrisonerQuest",     Index = 2, Mob = "Dangerous Prisoner",   Pos = CFrame.new(5654, 15, 866)},
+    {Sea = 1, Min = 250, Max = 299, Quest = "ColosseumQuest",    Index = 1, Mob = "Toga Warrior",         Pos = CFrame.new(-1820, 51, -2740)},
+    {Sea = 1, Min = 300, Max = 324, Quest = "MagmaQuest",        Index = 1, Mob = "Military Soldier",     Pos = CFrame.new(-5411, 11, 8454)},
+    {Sea = 1, Min = 325, Max = 374, Quest = "MagmaQuest",        Index = 2, Mob = "Military Spy",         Pos = CFrame.new(-5802, 86, 8828)},
+    {Sea = 1, Min = 375, Max = 399, Quest = "FishmanQuest",      Index = 1, Mob = "Fishman Warrior",      Pos = CFrame.new(60878, 18, 1543)},
+    {Sea = 1, Min = 400, Max = 449, Quest = "FishmanQuest",      Index = 2, Mob = "Fishman Commando",     Pos = CFrame.new(61922, 18, 1493)},
+    {Sea = 1, Min = 450, Max = 474, Quest = "SkyExp1Quest",      Index = 1, Mob = "God's Guard",          Pos = CFrame.new(-4710, 845, -1927)},
+    {Sea = 1, Min = 475, Max = 524, Quest = "SkyExp1Quest",      Index = 2, Mob = "Shanda",               Pos = CFrame.new(-7678, 5567, -497)},
+    {Sea = 1, Min = 525, Max = 549, Quest = "SkyExp2Quest",      Index = 1, Mob = "Royal Squad",          Pos = CFrame.new(-7624, 5658, -1467)},
+    {Sea = 1, Min = 550, Max = 624, Quest = "SkyExp2Quest",      Index = 2, Mob = "Royal Soldier",        Pos = CFrame.new(-7836, 5634, -1790)},
+    {Sea = 1, Min = 625, Max = 649, Quest = "FountainQuest",     Index = 1, Mob = "Galley Pirate",        Pos = CFrame.new(5551, 39, 3930)},
+    {Sea = 1, Min = 650, Max = 699, Quest = "FountainQuest",     Index = 2, Mob = "Galley Captain",       Pos = CFrame.new(5649, 39, 4936)},
+
+    -- SEA 2
+    {Sea = 2, Min = 700,  Max = 724,  Quest = "Area1Quest",        Index = 1, Mob = "Raider",               Pos = CFrame.new(-728, 52, 2345)},
+    {Sea = 2, Min = 725,  Max = 774,  Quest = "Area1Quest",        Index = 2, Mob = "Mercenary",            Pos = CFrame.new(-1004, 80, 1424)},
+    {Sea = 2, Min = 775,  Max = 799,  Quest = "Area2Quest",        Index = 1, Mob = "Swan Pirate",          Pos = CFrame.new(1068, 137, 1322)},
+    {Sea = 2, Min = 800,  Max = 874,  Quest = "Area2Quest",        Index = 2, Mob = "Factory Staff",        Pos = CFrame.new(73, 81, -27)},
+    {Sea = 2, Min = 875,  Max = 899,  Quest = "MarineQuest3",      Index = 1, Mob = "Marine Lieutenant",    Pos = CFrame.new(-2821, 73, -3038)},
+    {Sea = 2, Min = 900,  Max = 949,  Quest = "MarineQuest3",      Index = 2, Mob = "Marine Captain",       Pos = CFrame.new(-1861, 80, -3254)},
+    {Sea = 2, Min = 950,  Max = 974,  Quest = "ZombieQuest",       Index = 1, Mob = "Zombie",               Pos = CFrame.new(-5657, 173, -728)},
+    {Sea = 2, Min = 975,  Max = 999,  Quest = "ZombieQuest",       Index = 2, Mob = "Vampire",              Pos = CFrame.new(-6037, 32, -1340)},
+    {Sea = 2, Min = 1000, Max = 1049, Quest = "SnowMountainQuest", Index = 1, Mob = "Snow Trooper",         Pos = CFrame.new(549, 427, -5563)},
+    {Sea = 2, Min = 1050, Max = 1099, Quest = "SnowMountainQuest", Index = 2, Mob = "Winter Warrior",       Pos = CFrame.new(1142, 475, -5199)},
+    {Sea = 2, Min = 1100, Max = 1124, Quest = "IceSideQuest",      Index = 1, Mob = "Lab Subordinate",      Pos = CFrame.new(-5707, 15, -4513)},
+    {Sea = 2, Min = 1125, Max = 1174, Quest = "IceSideQuest",      Index = 2, Mob = "Horned Warrior",       Pos = CFrame.new(-6341, 15, -5723)},
+    {Sea = 2, Min = 1175, Max = 1199, Quest = "FireSideQuest",     Index = 1, Mob = "Magma Ninja",          Pos = CFrame.new(-5449, 76, -5808)},
+    {Sea = 2, Min = 1200, Max = 1249, Quest = "FireSideQuest",     Index = 2, Mob = "Lava Pirate",          Pos = CFrame.new(-5213, 49, -4701)},
+    {Sea = 2, Min = 1250, Max = 1274, Quest = "ShipQuest1",        Index = 1, Mob = "Ship Deckhand",        Pos = CFrame.new(1212, 150, 33059)},
+    {Sea = 2, Min = 1275, Max = 1299, Quest = "ShipQuest1",        Index = 2, Mob = "Ship Engineer",        Pos = CFrame.new(919, 43, 32779)},
+    {Sea = 2, Min = 1300, Max = 1324, Quest = "ShipQuest2",        Index = 1, Mob = "Ship Steward",         Pos = CFrame.new(919, 129, 33436)},
+    {Sea = 2, Min = 1325, Max = 1349, Quest = "ShipQuest2",        Index = 2, Mob = "Ship Officer",         Pos = CFrame.new(1036, 181, 33315)},
+    {Sea = 2, Min = 1350, Max = 1374, Quest = "FrostQuest",        Index = 1, Mob = "Arctic Warrior",       Pos = CFrame.new(5966, 62, -6179)},
+    {Sea = 2, Min = 1375, Max = 1424, Quest = "FrostQuest",        Index = 2, Mob = "Snow Lurker",          Pos = CFrame.new(5407, 69, -6880)},
+    {Sea = 2, Min = 1425, Max = 1449, Quest = "ForgottenQuest",    Index = 1, Mob = "Sea Soldier",          Pos = CFrame.new(-3028, 64, -10075)},
+    {Sea = 2, Min = 1450, Max = 1499, Quest = "ForgottenQuest",    Index = 2, Mob = "Water Fighter",        Pos = CFrame.new(-3352, 285, -10534)},
+
+    -- SEA 3 (1500 -> 1650+)
+    {Sea = 3, Min = 1500, Max = 1524, Quest = "PiratePortQuest",   Index = 1, Mob = "Pirate Millionaire",   Pos = CFrame.new(-712, 86, 5711)},
+    {Sea = 3, Min = 1525, Max = 1574, Quest = "PiratePortQuest",   Index = 2, Mob = "Pistol Billionaire",   Pos = CFrame.new(-723, 147, 5932)},
+    {Sea = 3, Min = 1575, Max = 1599, Quest = "AmazonQuest",       Index = 1, Mob = "Dragon Crew Warrior",  Pos = CFrame.new(6421, 51, -1143)},
+    {Sea = 3, Min = 1600, Max = 2600, Quest = "AmazonQuest",       Index = 2, Mob = "Dragon Crew Archer",   Pos = CFrame.new(6616, 378, 244)}
+}
+
+local function GetActiveQuestEntry()
+    local lvl = LocalPlayer.Data.Level.Value
+    for _, q in ipairs(QuestDatabase) do
+        if q.Sea == State.CurrentSea and lvl >= q.Min and lvl <= q.Max then
+            return q
+        end
+    end
+    -- Fallback на последний квест текущего моря
+    for i = #QuestDatabase, 1, -1 do
+        if QuestDatabase[i].Sea == State.CurrentSea then
+            return QuestDatabase[i]
+        end
+    end
+    return QuestDatabase[1]
+end
+
+local function HasActiveQuestForMob(mobName)
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local main = pg and pg:FindFirstChild("Main")
+    local qFrame = main and main:FindFirstChild("Quest")
+    if qFrame and qFrame.Visible then
+        local title = qFrame:FindFirstChild("Container")
+            and qFrame.Container:FindFirstChild("QuestTitle")
+            and qFrame.Container.QuestTitle:FindFirstChild("Title")
+        if title and title.Text:find(mobName) then
+            return true
+        end
+        -- Если взят чужой/устаревший квест — отменяем
+        pcall(function()
+            CommF_:InvokeServer("AbandonQuest")
+        end)
+    end
+    return false
+end
+
+-- ============================================================================
+-- 12. LIVE FUNPAY ACCOUNT VALUATION HUD (С РАСЧЕТОМ КОМИССИИ И ЧЕК-ЛИСТОМ)
+-- ============================================================================
+local function CalculateFunPayValuation()
+    local lvl = LocalPlayer.Data.Level.Value
+    local beli = LocalPlayer.Data.Beli.Value
+    local frags = LocalPlayer.Data.Fragments.Value
+
+    -- 1. Базовая оценка уровня и открытого моря (по актуальному стакану FunPay 2026)
+    local grossRub = 0
+    if lvl < 700 then
+        grossRub = math.floor((lvl / 700) * 65)
+    elseif lvl < 1500 then
+        grossRub = 75 + math.floor(((lvl - 700) / 800) * 165)
+    else
+        grossRub = 260 + math.floor(math.min(lvl - 1500, 1050) * 0.18)
+    end
+
+    -- 2. Бонус за 5 стилей 400 Mastery (Full Godhuman Ready)
+    local stylesReadyCount = 0
+    for _, style in ipairs(FightingStylesOrder) do
+        local m = State.StyleMasteryCache[style.Name] or 0
+        if m >= 400 then
+            stylesReadyCount = stylesReadyCount + 1
+            grossRub = grossRub + 75
+        elseif m >= 300 then
+            grossRub = grossRub + 35
+        end
+    end
+    if stylesReadyCount == 5 then
+        grossRub = grossRub + 320 -- Премия за готовый сет «Full Godhuman Ready»
+    end
+
+    -- 3. Бонус за гарантированное оружие
+    if State.OwnedItems["Saber"] then grossRub = grossRub + 45 end
+    if State.OwnedItems["Rengoku"] or State.OwnedItems["Midnight Blade"] then grossRub = grossRub + 85 end
+
+    -- 4. Бонус за экономику (Beli + Fragments)
+    if beli >= 10000000 then
+        grossRub = grossRub + 110
+    elseif beli >= 5000000 then
+        grossRub = grossRub + 45
+    end
+    if frags >= 5000 then
+        grossRub = grossRub + 80
+    end
+
+    -- 5. Оценка фруктов в инвентаре и съеденного фрукта
+    local bestFruitBonus = 0
+    local hasValuableFruit = false
+    for _, fName in ipairs(State.StoredFruits) do
+        local info = FruitValuation[fName]
+        if info then
+            grossRub = grossRub + info.RubBonus
+            if info.RubBonus >= 170 then
+                hasValuableFruit = true
+            end
+            if info.RubBonus > bestFruitBonus then
+                bestFruitBonus = info.RubBonus
+            end
+        end
+    end
+
+    local netRub = math.floor(grossRub * (1 - Config.FunPayFeePercent))
+    local grossEur = grossRub / Config.EurToRubRate
+    local netEur = netRub / Config.EurToRubRate
+
+    local isTenEuroReady = (lvl >= 1500)
+        and (stylesReadyCount == 5)
+        and (beli >= 10000000)
+        and (frags >= 5000)
+        and State.OwnedItems["Saber"]
+        and (State.OwnedItems["Rengoku"] or State.OwnedItems["Midnight Blade"])
+        and hasValuableFruit
+
+    return {
+        GrossRub = grossRub,
+        NetRub = netRub,
+        GrossEur = grossEur,
+        NetEur = netEur,
+        StylesReady = stylesReadyCount,
+        HasValuableFruit = hasValuableFruit,
+        IsLotReady = isTenEuroReady
+    }
+end
+
+local HudLabels = {}
+local function BuildTelemetryHUD()
+    local parentContainer = (gethui and gethui()) or CoreGui
+    local existing = parentContainer:FindFirstChild("ProjectRealKaitunHUD")
+    if existing then existing:Destroy() end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "ProjectRealKaitunHUD"
+    sg.ResetOnSpawn = false
+    sg.Parent = parentContainer
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 390, 0, 295)
+    frame.Position = UDim2.new(0, 18, 0, 60)
+    frame.BackgroundColor3 = Color3.fromRGB(16, 18, 24)
+    frame.BorderSizePixel = 0
+    frame.Parent = sg
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(65, 145, 255)
+    stroke.Thickness = 1.5
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -16, 0, 28)
+    title.Position = UDim2.new(0, 10, 0, 6)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = Color3.fromRGB(95, 175, 255)
+    title.Text = "PROJECT REAL // KAITUN 36H FUNPAY ENGINE"
+    title.Parent = frame
+
+    local rows = {
+        "Task", "Runtime", "LevelSea", "Styles",
+        "Economy", "Weapons", "Fruits", "FunPayGross", "FunPayNet", "LotStatus"
+    }
+
+    for i, key in ipairs(rows) do
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -20, 0, 23)
+        lbl.Position = UDim2.new(0, 10, 0, 34 + (i - 1) * 25)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Code
+        lbl.TextSize = 13
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextColor3 = Color3.fromRGB(225, 230, 240)
+        lbl.Text = "..."
+        lbl.Parent = frame
+        HudLabels[key] = lbl
+    end
+end
+
+local function UpdateTelemetryHUD()
+    if not HudLabels["Task"] then return end
+    local val = CalculateFunPayValuation()
+    local elapsed = os.time() - State.StartTime
+    local hours = math.floor(elapsed / 3600)
+    local mins = math.floor((elapsed % 3600) / 60)
+    local secs = elapsed % 60
+
+    local lvl = LocalPlayer.Data.Level.Value
+    local beliM = LocalPlayer.Data.Beli.Value / 1000000
+    local frags = LocalPlayer.Data.Fragments.Value
+
+    HudLabels["Task"].Text = string.format("Задача: %s", State.Task)
+    HudLabels["Runtime"].Text = string.format("Аптайм: %02d:%02d:%02d / Лимит 36:00:00", hours, mins, secs)
+    HudLabels["LevelSea"].Text = string.format("Уровень: %d (Sea %d) | Игроков: %d", lvl, State.CurrentSea, #Players:GetPlayers())
+    HudLabels["Styles"].Text = string.format("Стили 400 Mastery: %d / 5 (Godhuman Ready)", val.StylesReady)
+    HudLabels["Economy"].Text = string.format("Баланс: %.2fM $ | Фрагменты: %d f", beliM, frags)
+    HudLabels["Weapons"].Text = string.format("Оружие: Saber[%s] | Rengoku[%s]",
+        State.OwnedItems["Saber"] and "ДА" or "НЕТ",
+        (State.OwnedItems["Rengoku"] or State.OwnedItems["Midnight Blade"]) and "ДА" or "НЕТ"
+    )
+    HudLabels["Fruits"].Text = string.format("Фрукты в складе: %d (Ценный: %s)",
+        #State.StoredFruits,
+        val.HasValuableFruit and "ДА" or "НЕТ"
+    )
+    HudLabels["FunPayGross"].Text = string.format("Цена лота FunPay: ~%d ₽ (%.2f €)", val.GrossRub, val.GrossEur)
+    HudLabels["FunPayNet"].Text = string.format("Чистыми (-12%% ком.): ~%d ₽ (%.2f €)", val.NetRub, val.NetEur)
+    HudLabels["FunPayNet"].TextColor3 = Color3.fromRGB(110, 245, 145)
+
+    if val.IsLotReady then
+        HudLabels["LotStatus"].Text = "СТАТУС ЛОТА 10 €: [ГОТОВ К ПРОДАЖЕ НА FUNPAY]"
+        HudLabels["LotStatus"].TextColor3 = Color3.fromRGB(80, 255, 120)
+    else
+        HudLabels["LotStatus"].Text = "СТАТУС ЛОТА 10 €: [В ПРОЦЕССЕ СБОРКИ...]"
+        HudLabels["LotStatus"].TextColor3 = Color3.fromRGB(255, 205, 85)
+    end
+end
+
+-- ============================================================================
+-- 13. WATCHDOG ТАЙМЕР И ГЛАВНЫЙ ЦИКЛ КОНЕЧНОГО АВТОМАТА (FSM)
+-- ============================================================================
+local function CheckWatchdogProgress()
+    local currentExp = LocalPlayer.Data.Exp.Value
+    if currentExp ~= State.LastExpValue then
+        State.LastExpValue = currentExp
+        State.LastExpTimestamp = os.time()
+    elseif os.time() - State.LastExpTimestamp >= Config.WatchdogTimeout then
+        -- Сброс зависшего состояния через принудительный респавн
+        State.Task = "Watchdog: Сброс зависшей задачи"
+        State.LastExpTimestamp = os.time()
+        pcall(function()
+            CommF_:InvokeServer("AbandonQuest")
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+                LocalPlayer.Character:FindFirstChildOfClass("Humanoid").Health = 0
+            end
+        end)
+        task.wait(4)
+    end
+end
+
+local function RunPrimaryKaitunLoop()
+    InitializeSecurityAndBypass()
+    StartAdminAndDisconnectWatch()
+    BuildTelemetryHUD()
+    RefreshInventoryAndMastery()
+
+    -- Если на старте сервер переполнен (>3 человек) — сразу уходим на пустой (1 игрок)
+    if #Players:GetPlayers() > 3 then
+        task.spawn(function()
+            HopToOnePlayerServer("Оптимизация: переход на сервер с 1 игроком")
+        end)
+    end
+
+    -- Фоновый поток обновления интерфейса, гачи и статов
+    task.spawn(function()
+        while task.wait(1) do
+            pcall(function()
+                DismissAllModalDialogs()
+                AutoAllocateStats()
+                RunFruitGachaAndSniper()
+                CheckAndUnlockRengoku()
+                CheckWatchdogProgress()
+                UpdateTelemetryHUD()
+            end)
+        end
+    end)
+
+    -- Основной боевой поток FSM
+    while task.wait(0.1) do
+        if not State.ServerHopping then
+            local ok, err = pcall(function()
+                local hrp, hum = GetCharacterRoot()
+                if not hrp or not hum then return end
+
+                -- Приоритет 1: Смена морей по достижении 700 / 1500 LVL
+                if ExecuteSea1ToSea2Transition() then return end
+                if ExecuteSea2ToSea3Transition() then return end
+
+                -- Приоритет 2: Получение Saber на 200+ уровне
+                if ExecuteSaberQuest() then return end
+
+                -- Приоритет 3: Фарм Фрагментов (рейды) для Dragon Breath и чек-листа (5000+ f)
+                if RunAutoRaidForFragments() then return end
+
+                -- Приоритет 4: Основной цикл прокачки уровня и 5 стилей до 400 Mastery
+                local qEntry = GetActiveQuestEntry()
+                if not qEntry then return end
+
+                if not HasActiveQuestForMob(qEntry.Mob) then
+                    State.Task = string.format("Получение квеста: %s (LVL %d)", qEntry.Mob, LocalPlayer.Data.Level.Value)
+                    SafeTweenTo(qEntry.Pos)
+                    CommF_:InvokeServer("StartQuest", qEntry.Quest, qEntry.Index)
+                    task.wait(0.35)
+                else
+                    State.Task = string.format("Фарм AoE: %s", qEntry.Mob)
+                    local enemies = Workspace:FindFirstChild("Enemies")
+                    local targetMob = nil
+                    if enemies then
+                        for _, mob in ipairs(enemies:GetChildren()) do
+                            if mob.Name == qEntry.Mob and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChildOfClass("Humanoid") and mob.Humanoid.Health > 0 then
+                                targetMob = mob
+                                break
+                            end
+                        end
+                    end
+
+                    if targetMob then
+                        local anchor = targetMob.HumanoidRootPart.Position
+                        SafeTweenTo(CFrame.new(anchor + Config.HoverOffset))
+                        BringMobsToAnchor(qEntry.Mob, anchor)
+                        ExecuteFastAttack()
+                    else
+                        -- Ожидание спавна на базовой точке квеста на безопасной высоте
+                        SafeTweenTo(qEntry.Pos * CFrame.new(0, 35, 0))
+                    end
+                end
+            end)
+        end
+    end
+end
+
+RunPrimaryKaitunLoop()
